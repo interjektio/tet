@@ -12,6 +12,7 @@ requires = """
     passlib
     sqlalchemy
     pyramid_di
+    pyjwt
 """.split()
 
 dev_requires = ["pytest"]
