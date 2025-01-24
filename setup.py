@@ -12,10 +12,17 @@ requires = """
     passlib
     sqlalchemy
     pyramid_di
-    pyjwt
 """.split()
 
 dev_requires = ["pytest"]
+auth_requires = """
+    pyjwt
+    webtest
+    pyramid_tm
+    psycopg2
+    zope.sqlalchemy 
+""".split()
+test_requires = dev_requires + auth_requires + requires
 
 setup(
     name="tet",
@@ -48,5 +55,8 @@ setup(
     zip_safe=False,
     test_suite="tet",
     install_requires=requires,
-    extras_require={"dev": dev_requires},
+    extras_require={
+        "dev": dev_requires,
+        "test": test_requires,
+    },
 )
