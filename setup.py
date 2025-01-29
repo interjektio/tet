@@ -13,14 +13,18 @@ requires = """
     pyramid_di
 """.split()
 
-auth_requires = ['pyjwt']
+auth_requires = ["pyjwt"]
 
-dev_requires = """
+dev_requires = (
+    """
     pytest
     webtest
     pyramid_tm
     zope.sqlalchemy 
-""".split() + auth_requires
+    pre-commit
+""".split()
+    + auth_requires
+)
 
 setup(
     name="tet",
