@@ -7,21 +7,19 @@ from zope.interface import Interface
 from zope.interface import implementer
 from pyramid.config.security import SecurityConfiguratorMixin
 
-__all__ = [
-    'INewAuthorizationPolicy'
-]
+__all__ = ["INewAuthorizationPolicy"]
 
 
 class INewAuthorizationPolicy(Interface):
-    """ An object representing a Tet authorization policy. """
+    """An object representing a Tet authorization policy."""
 
     def permits(request, context, principals, permission):
-        """ Return ``True`` if any of the ``principals`` is allowed the
+        """Return ``True`` if any of the ``principals`` is allowed the
         ``permission`` in the current ``context``, else return ``False``
         """
 
     def principals_allowed_by_permission(request, context, permission):
-        """ Return a set of principal identifiers allowed by the
+        """Return a set of principal identifiers allowed by the
         ``permission`` in ``context``.  This behavior is optional; if you
         choose to not implement it you should define this method as
         something which raises a ``NotImplementedError``.  This method
@@ -41,9 +39,9 @@ class AuthorizationPolicyWrapper:
 
     def principals_allowed_by_permission(self, context, permission):
         request = get_current_request()
-        return self.wrapped.principals_allowed_by_permission(request,
-                                                             context,
-                                                             permission)
+        return self.wrapped.principals_allowed_by_permission(
+            request, context, permission
+        )
 
 
 def includeme(config: Configurator):
@@ -55,4 +53,4 @@ def includeme(config: Configurator):
         # noinspection PyCallByClass
         SecurityConfiguratorMixin.set_authorization_policy(config, policy)
 
-    config.add_directive('set_authorization_policy', set_authorization_policy)
+    config.add_directive("set_authorization_policy", set_authorization_policy)

@@ -137,7 +137,7 @@ def create_configurator(
     included_features=(),
     excluded_features=(),
     package=None,
-    **kw
+    **kw,
 ) -> Configurator:
     defaults = {}
     if merge_global_config and isinstance(global_config, Mapping):
@@ -187,7 +187,7 @@ def application_factory(
     included_features=MINIMAL_FEATURES,
     excluded_features=(),
     package=None,
-    **extra_parameters
+    **extra_parameters,
 ):
     """
     A decorator for main method / application configurator for Tet. The
@@ -246,7 +246,7 @@ def application_factory(
                 included_features=included_features,
                 excluded_features=excluded_features,
                 package=package,
-                **extra_parameters
+                **extra_parameters,
             )
 
             returned = function(config)

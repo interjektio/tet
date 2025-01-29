@@ -4,8 +4,9 @@ from sqlalchemy.ext import declarative
 
 from ..util.crypt import crypt, verify
 
+
 class UserPasswordMixin(object):
-    _password = sa.Column('password', sa.Unicode, nullable=True)
+    _password = sa.Column("password", sa.Unicode, nullable=True)
 
     def _set_password(self, password):
         self._password = crypt(password)
@@ -22,5 +23,6 @@ class UserPasswordMixin(object):
 
     @declarative.declared_attr
     def password(cls):
-        return orm.synonym('_password', descriptor=property(cls._get_password,
-                                                            cls._set_password))
+        return orm.synonym(
+            "_password", descriptor=property(cls._get_password, cls._set_password)
+        )
