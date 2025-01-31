@@ -26,9 +26,7 @@ def configure_i18n(config: Configurator, default_domain: str):
     def translate(request):
         localizer = request.localizer
 
-        def auto_translate(
-            string, *, domain=default_domain, mapping=None, context=None
-        ):
+        def auto_translate(string, *, domain=default_domain, mapping=None, context=None):
             if isinstance(string, str):
                 string = tsf(string, context=context)
 
@@ -45,9 +43,7 @@ def configure_i18n(config: Configurator, default_domain: str):
             if isinstance(singular, str):
                 singular = tsf(singular, context=context)
 
-            return localizer.pluralize(
-                singular, plural, n, domain=domain, mapping=mapping
-            )
+            return localizer.pluralize(singular, plural, n, domain=domain, mapping=mapping)
 
         return auto_pluralize
 
@@ -57,7 +53,5 @@ def configure_i18n(config: Configurator, default_domain: str):
 
 
 def includeme(config: Configurator):
-    default_domain = config.get_settings().get(
-        "default_i18n_domain", config.package.__name__
-    )
+    default_domain = config.get_settings().get("default_i18n_domain", config.package.__name__)
     configure_i18n(config, default_domain)

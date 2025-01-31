@@ -49,9 +49,7 @@ def add_static_view_with_breaker(config, name, path, **kw):
     redirected_route = name + "-redirect"
     redirected_url = name.rstrip("/") + "/*path"
     config.add_route(name=name + "-breaker", pattern=redirected_url)
-    config.add_view(
-        route_name=name + "-breaker", view=make_redirector(redirected_route)
-    )
+    config.add_view(route_name=name + "-breaker", view=make_redirector(redirected_route))
     config.add_route(name=redirected_route, pattern=redirected_url, static=True)
 
 

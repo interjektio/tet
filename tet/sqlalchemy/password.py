@@ -23,6 +23,4 @@ class UserPasswordMixin(object):
 
     @declarative.declared_attr
     def password(cls):
-        return orm.synonym(
-            "_password", descriptor=property(cls._get_password, cls._set_password)
-        )
+        return orm.synonym("_password", descriptor=property(cls._get_password, cls._set_password))

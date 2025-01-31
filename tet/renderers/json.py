@@ -24,14 +24,10 @@ def add_json_adapter(
     adapter: Callable[[Any], Any],
     renderer: str = "json",
 ):
-    _get_json_renderer_registry(config)[renderer].add_adapter(
-        type_or_iface=for_, adapter=adapter
-    )
+    _get_json_renderer_registry(config)[renderer].add_adapter(type_or_iface=for_, adapter=adapter)
 
 
-def construct_default_renderer(
-    renderer_factory: Callable[..., Any] = JSON, **renderer_args
-):
+def construct_default_renderer(renderer_factory: Callable[..., Any] = JSON, **renderer_args):
     json_renderer = renderer_factory(**renderer_args)
 
     try:

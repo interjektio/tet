@@ -32,9 +32,7 @@ class InterfaceImplementor(_InterfaceBase):
     @property
     def zope_interface(cls):
         raise AttributeError(
-            "{} is not a SimpleInterface, and therefore has no Zope Interface".format(
-                cls
-            )
+            "{} is not a SimpleInterface, and therefore has no Zope Interface".format(cls)
         )
 
 

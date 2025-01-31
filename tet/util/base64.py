@@ -10,9 +10,7 @@ class BaseCodec(object):
     def generate_characters(cls, length):
         randomizer = random.SystemRandom()
         max_num = len(cls.chars) - 1
-        return b"".join(
-            cls.chars[randomizer.randint(0, max_num)] for i in range(length)
-        ).decode()
+        return b"".join(cls.chars[randomizer.randint(0, max_num)] for i in range(length)).decode()
 
 
 class Base64(BaseCodec):
@@ -54,9 +52,7 @@ class CrockfordBase32(BaseCodec):
         if isinstance(string, str):
             string = string.decode()
 
-        return (
-            base64.b32encode(string).translate(_std_b32_to_crockford_b32, b"=").decode()
-        )
+        return base64.b32encode(string).translate(_std_b32_to_crockford_b32, b"=").decode()
 
     @classmethod
     def decode(cls, string, normalize=True, validate=False):
