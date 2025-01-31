@@ -9,8 +9,10 @@ def deprecated(func):
 
     def new_func(*args, **kwargs):
         warnings.warn(
-            "Call to deprecated function {}."
-            .format(func.__qualname__, category=DeprecationWarning, stacklevel=2))
+            "Call to deprecated function {}.".format(
+                func.__qualname__, category=DeprecationWarning, stacklevel=2
+            )
+        )
 
         return func(*args, **kwargs)
 
@@ -27,6 +29,7 @@ class reify_attr(object):
     by finding it on the class in Python <=3.5, and using the ``__set_name__``
     on Python 3.6.
     """
+
     def __init__(self, wrapped):
         self.wrapped = wrapped
         update_wrapper(self, wrapped)
