@@ -22,6 +22,7 @@ dev_requires = (
     pyramid_tm
     zope.sqlalchemy 
     pre-commit
+    psycopg2
 """.split()
     + auth_requires
 )
