@@ -2,10 +2,7 @@ from pyramid.renderers import get_renderer
 from functools import wraps
 from pyramid.events import BeforeRender
 from pyramid.interfaces import IDict, Attribute
-from zope.interface import (
-    implementer,
-    Interface
-)
+from zope.interface import implementer, Interface
 
 
 def render_fragment(tpl, dct, system):
@@ -14,16 +11,18 @@ def render_fragment(tpl, dct, system):
 
 
 def get_request(self_or_request):
-    if hasattr(self_or_request, 'request'):
+    if hasattr(self_or_request, "request"):
         return self_or_request.request
 
     return self_or_request
 
 
 class IBeforeViewletRender(IDict):
-    rendering_val = Attribute('The value returned by a view or passed to a '
-                              '``render`` method for this rendering. '
-                              'This feature is new in Pyramid 1.2.')
+    rendering_val = Attribute(
+        "The value returned by a view or passed to a "
+        "``render`` method for this rendering. "
+        "This feature is new in Pyramid 1.2."
+    )
 
 
 @implementer(IBeforeViewletRender)

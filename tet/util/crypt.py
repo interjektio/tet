@@ -1,7 +1,7 @@
 import passlib.hash
-import random
 
 password_hash = passlib.hash.sha256_crypt
+
 
 def crypt(password):
     if isinstance(password, str):
@@ -14,6 +14,7 @@ def crypt(password):
         rv = rv.decode()
 
     return rv
+
 
 def verify(password, hash):
     if isinstance(password, str):
