@@ -1,25 +1,30 @@
 import dataclasses
 import hashlib
+import logging
 import secrets
 import typing as tp
 from datetime import datetime, timedelta, timezone
 
 import jwt
-import logging
-
-from pyramid.authorization import ACLAuthorizationPolicy, ACLHelper
+from pyramid.authentication import CallbackAuthenticationPolicy
+from pyramid.authorization import ACLHelper
 from pyramid.config import Configurator
 from pyramid.httpexceptions import HTTPForbidden, HTTPUnauthorized
+from pyramid.interfaces import ISecurityPolicy
 from pyramid.request import Request, Response
 from pyramid.security import NO_PERMISSION_REQUIRED, Everyone, Authenticated
-from pyramid.interfaces import ISecurityPolicy
 from pyramid_di import RequestScopedBaseService, autowired
 from sqlalchemy import Column, DateTime, Integer, String
 from sqlalchemy.orm import Session
 from zope.interface import Interface, implementer
 
 logger = logging.getLogger(__name__)
-__all__ = ["TokenAuthenticationPolicy", "TokenMixin", "JWTRegisteredClaims"]
+__all__ = [
+    "TokenAuthenticationPolicy",
+    "JWTCookieAuthenticationPolicy",
+    "TokenMixin",
+    "JWTRegisteredClaims",
+]
 
 
 @dataclasses.dataclass
@@ -87,12 +92,102 @@ class JWTRegisteredClaims:
         return {k: v for k, v in dataclasses.asdict(self).items() if v is not None}
 
 
+@implementer(ISecurityPolicy)
+class TokenAuthenticationPolicy(CallbackAuthenticationPolicy):
+    """
+    A Pyramid security policy for token-based authentication.
+
+    All methods in this class are only invoked if the view has a `permission` set in `@view_config()`.
+    This ensures that authentication and authorization checks are enforced before access is granted.
+
+    Example:
+
+    .. code-block:: python
+
+        @view_config(route_name="home", renderer="json", permission="view")
+        def home_view(request):
+            user_id = request.authenticated_userid
+            return {"message": f"Hello, User {user_id}"}
+    """
+
+    def __init__(self):
+        self.acl = ACLHelper()
+
+    def authenticated_userid(self, request: Request) -> tp.Optional[int]:
+        """This method of the policy should
+        only return a value if the request has been successfully authenticated.
+
+        Returns:
+           - Return the ``userid`` of the currently authenticated user
+           - ``None`` if no user is authenticated.
+        """
+        token_service: TetTokenService = request.find_service(TetTokenService)
+        jwt_token = request.headers.get(request.registry.tet_auth_access_token_header)
+
+        if not jwt_token:
+            return None
+
+        payload = token_service.verify_jwt(jwt_token)
+
+        return payload.get("user_id") if payload else None
+
+    def permits(self, request, context, permission):
+        principals = self.effective_principals(request)
+        return self.acl.permits(context, principals, permission)
+
+    def effective_principals(self, request) -> tp.List[str]:
+        """This method of the policy should return at least one principal
+        in the list: the userid of the user (and usually 'system.Authenticated'
+        as well).
+        Returns:
+           A sequence representing the groups that the current user is in
+        """
+        principals = [Everyone]
+        user_id = self.authenticated_userid(request)
+        if user_id is not None:
+            principals.extend([f"user:{user_id}", Authenticated])
+        return principals
+
+    def forget(self, request) -> tp.List[tuple[str, str]]:
+        """
+        This method does not need to be implemented for header-based authentication.
+        """
+        return []
+
+
+@implementer(ISecurityPolicy)
+class JWTCookieAuthenticationPolicy(TokenAuthenticationPolicy):
+    """
+    A Pyramid security policy that authenticates users via JWT tokens stored in cookies.
+
+    All methods in this class are only invoked if the view has a `permission` set in `@view_config()`,
+    ensuring authentication and authorization checks are enforced before access is granted.
+
+    This policy retrieves JWT tokens from cookies instead of headers.
+    """
+
+    def __init__(self):
+        super().__init__()
+
+
 DEFAULT_JWT_ALGORITHM = "HS256"
 DEFAULT_JWT_TOKEN_EXPIRATION_MINS = 15
+DEFAULT_LONG_TERM_TOKEN_EXPIRATION_MINS = 60 * 12
 DEFAULT_USER_ID_COLUMN = "user_id"
-DEFAULT_LONG_TERM_TOKEN = "X-Long-Token"
-DEFAULT_ACCESS_TOKEN = "X-Access-Token"
+DEFAULT_LONG_TERM_TOKEN_NAME = "X-Long-Token"
+DEFAULT_ACCESS_TOKEN_NAME = "X-Access-Token"
+DEFAULT_ACCESS_TOKEN_COOKIE_NAME = "access-token"
+DEFAULT_REFRESH_TOKEN_COOKIE_NAME = "refresh-token"
+DEFAULT_PATH = "/"
+DEFAULT_REFRESH_TOKEN_ROUTE = "refresh"
+DEFAULT_UNAUTHORIZED_MESSAGE = """Access denied. You are not authorised to access this resource.
+Please ensure that your credientials are correct and try again.
+"""
+
+DEFAULT_LOGIN_VIEW = "login"
+COOKIE_LOGIN_VIEW = "cookie_login"
 DEFAULT_REGISTERED_CLAIMS = JWTRegisteredClaims()
+DEFAULT_SECURITY_POLICY = TokenAuthenticationPolicy()
 UTC = timezone.utc
 
 
@@ -126,9 +221,15 @@ def set_token_authentication(
     user_id_column: str = DEFAULT_USER_ID_COLUMN,
     jwt_algorithm: str = DEFAULT_JWT_ALGORITHM,
     jwt_token_expiration_mins: int = DEFAULT_JWT_TOKEN_EXPIRATION_MINS,
-    access_token_header: str = DEFAULT_ACCESS_TOKEN,
-    long_term_token_header: str = DEFAULT_LONG_TERM_TOKEN,
+    long_term_token_expiration_mins: int = DEFAULT_LONG_TERM_TOKEN_EXPIRATION_MINS,
+    access_token_header: str = DEFAULT_ACCESS_TOKEN_NAME,
+    long_term_token_header: str = DEFAULT_LONG_TERM_TOKEN_NAME,
+    long_term_token_cookie_name: str = DEFAULT_REFRESH_TOKEN_COOKIE_NAME,
     default_claims: JWTRegisteredClaims = DEFAULT_REGISTERED_CLAIMS,
+    refresh_token_route: str = DEFAULT_REFRESH_TOKEN_ROUTE,
+    security_policy: tp.Optional[
+        tp.Union[type["TokenAuthenticationPolicy"], type["JWTCookieAuthenticationPolicy"]]
+    ] = DEFAULT_SECURITY_POLICY,
 ) -> None:
     """
     Configure token-based authentication for a Pyramid application (with conflict detection).
@@ -197,6 +298,7 @@ def set_token_authentication(
         access_token_header: The header name for the access token (default: ``"X-Access-Token"``).
         long_term_token_header: The header name for the long-term token (default: ``"X-Long-Token"``).
         default_claims: Default JWT registered claims to include in the token payload.
+        security_policy: A custom security policy to use for token authentication.
     """
 
     def register():
@@ -205,61 +307,34 @@ def set_token_authentication(
         config.registry.tet_auth_user_id_column = user_id_column
         config.registry.tet_auth_access_token_header = access_token_header
         config.registry.tet_auth_long_term_token_header = long_term_token_header
+        config.registry.tet_auth_long_term_token_cookie_name = long_term_token_cookie_name
         config.registry.tet_auth_default_claims = default_claims
 
         config.registry.tet_auth_login_callback = login_callback
         config.registry.tet_auth_jwk_resolver = jwk_resolver
         config.registry.tet_auth_jwt_algorithm = jwt_algorithm
         config.registry.tet_auth_jwt_expiration_mins = jwt_token_expiration_mins
+        config.registry.tet_auth_long_term_token_expiration_mins = long_term_token_expiration_mins
+        config.registry.tet_auth_refresh_token_route = refresh_token_route
 
     config.action(discriminator="set_token_authentication", callable=register)
 
+    config.set_security_policy(security_policy)
 
-@implementer(ISecurityPolicy)
-class TokenAuthenticationPolicy:
-    def __init__(self):
-        self.acl = ACLHelper()
-
-    def authenticated_userid(self, request: Request) -> tp.Optional[int]:
-        """This method of the policy should
-        only return a value if the request has been successfully authenticated.
-
-        Returns:
-           - Return the ``userid`` of the currently authenticated user
-           - ``None`` if no user is authenticated.
-        """
-        token_service: TetTokenService = request.find_service(TetTokenService)
-        jwt_token = request.headers.get(request.registry.tet_auth_access_token_header)
-
-        if not jwt_token:
-            return None
-
-        payload = token_service.verify_jwt(jwt_token)
-
-        return payload.get("user_id") if payload else None
-
-    def permits(self, request, context, permission):
-        principals = self.effective_principals(request)
-        return self.acl.permits(context, principals, permission)
-
-    def effective_principals(self, request) -> tp.List[str]:
-        """This method of the policy should return at least one principal
-        in the list: the userid of the user (and usually 'system.Authenticated'
-        as well).
-        Returns:
-           A sequence representing the groups that the current user is in
-        """
-        principals = [Everyone]
-        user_id = self.authenticated_userid(request)
-        if user_id is not None:
-            principals.extend([f"user:{user_id}", Authenticated])
-        return principals
-
-    def forget(self, request) -> tp.List[tuple[str, str]]:
-        """
-        This method does not need to be implemented for header-based authentication.
-        """
-        return []
+    login_view_attr = (
+        COOKIE_LOGIN_VIEW
+        if isinstance(security_policy, JWTCookieAuthenticationPolicy)
+        else DEFAULT_LOGIN_VIEW
+    )
+    config.add_view(
+        AuthViews,
+        attr=login_view_attr,
+        route_name="tet_auth_login",
+        renderer="json",
+        request_method="POST",
+        require_csrf=False,
+        permission=NO_PERMISSION_REQUIRED,
+    )
 
 
 class TokenMixin:
@@ -434,31 +509,43 @@ class AuthViews:
         self.long_term_token_header = self.registry.tet_auth_long_term_token_header
         self.access_token_header = self.registry.tet_auth_access_token_header
         self.project_prefix = self.registry.tet_auth_project_prefix
+        self.long_term_token_cookie_name = self.registry.tet_auth_long_term_token_cookie_name
+        self.long_term_token_expiration_mins = (
+            self.registry.tet_auth_long_term_token_expiration_mins
+        )
+        self.refresh_token_route = self.registry.tet_auth_refresh_token_route
+        self.route_prefix = self.request.current_route_path().rpartition("/")[0]
 
-    def login_view(self) -> tp.Union[tp.Dict[str, tp.Any], HTTPForbidden]:
-        login_callback = self.registry.tet_auth_login_callback
-
-        user_id = login_callback(self.request)
-
-        if user_id is None:
-            raise HTTPForbidden()
-
-        token = self.token_service.create_long_term_token(user_id, self.project_prefix)
-
-        resp: Response = self.response
-        resp.headers[self.long_term_token_header] = token
-
-        return dict(
-            user_id=user_id,
-            token=token,
+    def _set_cookie(
+        self,
+        name,
+        value,
+        max_age,
+        domain=None,
+        secure=True,
+        httponly=True,
+        samesite="Lax",
+        overwrite=True,
+        path=DEFAULT_PATH,
+        **kwargs,
+    ):
+        self.response.set_cookie(
+            name=name,
+            value=value,
+            max_age=max_age,
+            domain=domain,
+            secure=secure,
+            httponly=httponly,
+            samesite=samesite,
+            overwrite=overwrite,
+            path=path,
+            **kwargs,
         )
 
-    def jwt_token_view(self) -> str:
-        token = self.request.headers.get(self.long_term_token_header)
-
+    def _create_jwt(self, refresh_token: str) -> str:
         try:
             token_from_db = self.token_service.retrieve_and_validate_token(
-                token, self.project_prefix
+                refresh_token, self.project_prefix
             )
         except ValueError as e:
             logger.exception(f"Error validating token: {e}")
@@ -466,10 +553,48 @@ class AuthViews:
 
         user_id = getattr(token_from_db, self.token_service.user_id_column)
 
-        jwt_token = self.token_service.create_short_term_jwt(user_id)
+        return self.token_service.create_short_term_jwt(user_id)
 
-        self.response.headers[self.access_token_header] = jwt_token
+    def login(self) -> tp.Union[tp.Dict[str, tp.Any], HTTPUnauthorized, None]:
+        login_callback = self.registry.tet_auth_login_callback
+        user_id = login_callback(self.request)
 
+        if user_id is None:
+            raise HTTPUnauthorized(json_body={"message": DEFAULT_UNAUTHORIZED_MESSAGE})
+
+        refresh_token = self.token_service.create_long_term_token(user_id, self.project_prefix)
+        self.response.headers[self.long_term_token_header] = refresh_token
+
+        access_token = self.token_service.create_short_term_jwt(user_id)
+        self.response.headers[self.access_token_header] = access_token
+
+        return {
+            "success": True,
+        }
+
+    def jwt_token(self) -> str:
+        token = self.request.headers.get(self.long_term_token_header)
+        access_token = self._create_jwt(token)
+        self.response.headers[self.access_token_header] = access_token
+
+        return "ok"
+
+    def cookie_login(self) -> tp.Union[tp.Dict[str, tp.Any], HTTPForbidden, None, Response]:
+        response = self.login()
+        self._set_cookie(
+            name=self.long_term_token_cookie_name,
+            value=self.response.headers[self.long_term_token_header],
+            max_age=self.long_term_token_expiration_mins * 60,
+            path=f"{self.route_prefix}/{self.refresh_token_route}",
+        )
+        return response
+
+    def refresh_token(self) -> tp.Union[tp.Dict[str, tp.Any], str, HTTPUnauthorized, None]:
+        refresh_token = self.request.cookies.get(self.long_term_token_cookie_name)
+        if not refresh_token:
+            raise HTTPUnauthorized(json_body={"message": DEFAULT_UNAUTHORIZED_MESSAGE})
+        access_token = self._create_jwt(refresh_token)
+        self.response.headers[self.access_token_header] = access_token
         return "ok"
 
 
@@ -477,22 +602,22 @@ def includeme(config: Configurator):
     """Routes and stuff to register maybe under a prefix"""
     config.add_route("tet_auth_login", "login")
     config.add_route("tet_auth_jwt", "access-token")
+    config.add_route("tet_auth_refresh_token", "refresh")
     config.add_view(
         AuthViews,
-        attr="login_view",
-        route_name="tet_auth_login",
-        renderer="json",
-        request_method="POST",
-        require_csrf=False,
-        permission=NO_PERMISSION_REQUIRED,
-    )
-
-    config.add_view(
-        AuthViews,
-        attr="jwt_token_view",
+        attr="jwt_token",
         route_name="tet_auth_jwt",
         renderer="string",
         request_method="GET",
+        require_csrf=False,
+        permission=NO_PERMISSION_REQUIRED,
+    )
+    config.add_view(
+        AuthViews,
+        attr="refresh_token",
+        route_name="tet_auth_refresh_token",
+        renderer="json",
+        request_method="POST",
         require_csrf=False,
         permission=NO_PERMISSION_REQUIRED,
     )
@@ -505,5 +630,3 @@ def includeme(config: Configurator):
     )
 
     config.set_default_permission("view")
-    config.set_authorization_policy(ACLAuthorizationPolicy())
-    config.set_authentication_policy(TokenAuthenticationPolicy())
