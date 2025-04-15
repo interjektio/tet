@@ -595,6 +595,10 @@ class AuthViews:
 
     def cookie_login(self) -> tp.Union[tp.Dict[str, tp.Any], HTTPForbidden, None, Response]:
         response = self.login()
+
+        if self.cookie_attributes:
+            self.cookie_attributes.value = self.response.headers[self.long_term_token_header]
+
         self._set_cookie(
             cookie_attrs=self.cookie_attributes
             or CookieAttributes(
