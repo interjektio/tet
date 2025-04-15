@@ -591,7 +591,6 @@ class AuthViews:
         token = self.request.headers.get(self.long_term_token_header)
         access_token = self._create_jwt(token)
         self.response.headers[self.access_token_header] = access_token
-
         return "ok"
 
     def cookie_login(self) -> tp.Union[tp.Dict[str, tp.Any], HTTPForbidden, None, Response]:
