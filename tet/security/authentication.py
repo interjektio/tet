@@ -428,7 +428,11 @@ class MultiFactorAuthenticationMethodMixin:
 
     __tablename__ = "multi_factor_authentication_method"
     id = Column(Integer, primary_key=True)
-    method_type = Column(Enum(MultiFactorAuthMethodType), nullable=False, index=True)
+    method_type = Column(
+        Enum(MultiFactorAuthMethodType, values_callable=lambda cls: [e.value for e in cls]),
+        nullable=False,
+        index=True,
+    )
     data = Column(JSONB, nullable=False, default=dict)
     is_active = Column(Boolean, default=True, nullable=False)
     verified = Column(Boolean, default=False, nullable=False)
@@ -479,7 +483,7 @@ class TetMultiFactorAuthenticationService(RequestScopedBaseService):
         """
         existing_method = (
             self.session.query(self.tet_multi_factor_auth_method_model)
-            .filter_by(user_id=user_id, method_type=method_type.value)
+            .filter_by(user_id=user_id, method_type=method_type)
             .one_or_none()
         )
 
@@ -512,13 +516,15 @@ class TetMultiFactorAuthenticationService(RequestScopedBaseService):
         totp = pyotp.TOTP(secret)
         return totp.verify(token)
 
-    def get_method(self, *, user_id: tp.Any, method_type: MultiFactorAuthMethodType):
+    def get_method(
+        self, *, user_id: tp.Any, method_type: MultiFactorAuthMethodType, is_active: bool = True
+    ):
         """
         Retrieve a multi-factor authentication method for a user.
         """
         return (
             self.session.query(self.tet_multi_factor_auth_method_model)
-            .filter_by(user_id=user_id, method_type=method_type.value, is_active=True)
+            .filter_by(user_id=user_id, method_type=method_type, is_active=is_active)
             .one_or_none()
         )
 
