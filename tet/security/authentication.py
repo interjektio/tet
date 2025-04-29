@@ -781,6 +781,7 @@ class AuthViews:
         response = self.login()
         if isinstance(response, dict) and response.get("mfa_required"):
             return response
+
         if self.cookie_attributes:
             self.cookie_attributes.value = self.response.headers[self.long_term_token_header]
             if not self.cookie_attributes.max_age:
