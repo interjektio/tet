@@ -1,15 +1,23 @@
+import json
 import logging
-
 import typing as tp
+
 import pytest
 from pyramid.request import Request
+from pyramid.response import Response
 from pyramid.security import Allow, Authenticated, Everyone, Deny
 from pyramid.testing import setUp, tearDown
-from sqlalchemy import create_engine, or_
+from sqlalchemy import create_engine
 from sqlalchemy.orm import Session
 
-from tests.models.accounts import Base, Token, User
+from tests.models.accounts import Base, Token, User, MultiFactorAuthenticationMethod
 from tet.config import Configurator as tetConfigurator
+from tet.security.authentication import (
+    TokenAuthenticationPolicy,
+    JWTCookieAuthenticationPolicy,
+    AuthLoginResult,
+)
+from tet.view import view_config
 
 DB_NAME = "test_tet"
 DB_URL = f"postgresql+psycopg2://test_tet:test_tet@localhost:5432/{DB_NAME}"
@@ -52,20 +60,32 @@ def db_session(db_engine, pyramid_request, transaction_manager):
         yield session
 
 
-def login_callback(request: Request) -> tp.Any:
+def login_callback(request: Request) -> AuthLoginResult:
     """This is just an example of a login callback. It should be defined by the pyramid app."""
+    if not request.content_length:
+        return AuthLoginResult(user_id=None)
+
     db_session = request.find_service(Session)
+
     payload = request.json_body
-    # user_identity here could be an email, or username
-    user_identity = payload["user_identity"]
-    user = (
-        db_session.query(User)
-        .filter(or_(User.email == user_identity, User.name == user_identity))
-        .first()
+    user_identity = payload.get("user_identity")
+    totp_token = payload.get("totp_token")
+
+    if not user_identity:
+        return AuthLoginResult(user_id=None)
+
+    user: User = db_session.query(User).filter(User.email == user_identity).one_or_none()
+    if not user or not user.validate_password(payload.get("password", "")):
+        return AuthLoginResult(
+            user_id=None,
+            user_identity=user_identity,
+        )
+
+    return AuthLoginResult(
+        user_id=user.id,
+        user_identity=user_identity,
+        totp_token=totp_token,
     )
-    if not user:
-        return None
-    return user.id
 
 
 def jwk_resolver(request: Request) -> str:
@@ -94,7 +114,7 @@ class RootFactory(object):
 
 
 @pytest.fixture()
-def pyramid_app(db_engine):
+def pyramid_config(db_engine):
     """Fixture to create and configure a Pyramid application."""
     settings = {
         "sqlalchemy.url": DB_URL,
@@ -110,17 +130,80 @@ def pyramid_app(db_engine):
         config.setup_sqlalchemy(engine=db_engine)
         config.set_root_factory(RootFactory)
         config.include("tet.security.authentication", route_prefix="/api/v1/auth")
-        config.set_token_authentication(
-            long_term_token_model=Token,
-            project_prefix=config.registry.settings["project_prefix"],
-            login_callback=login_callback,
-            jwk_resolver=jwk_resolver,
-        )
-        config.add_route("home", "/")
-        config.add_view(
-            lambda request: {"message": "Hello, World!"},
-            route_name="home",
-            renderer="json",
-        )
-        app = config.make_wsgi_app()
+    yield config
+
+
+JWT_AUTH = "TOKEN_AUTH"
+JWT_COOKIE_AUTH = "JWT_COOKIE_AUTH"
+
+
+@pytest.fixture(
+    params=[
+        pytest.param({"security_policy": TokenAuthenticationPolicy}, id=JWT_AUTH),
+        pytest.param({"security_policy": JWTCookieAuthenticationPolicy}, id=JWT_COOKIE_AUTH),
+    ]
+)
+def security_policy(request):
+    return request.param["security_policy"]
+
+
+@view_config(route_name="home", renderer="json", permission="view")
+def home_view(request: Request):
+    response: Response = request.response
+    response.text = json.dumps({"message": "Hello, World!"})
+    response.content_type = "application/json"
+    return response
+
+
+@pytest.fixture()
+def pyramid_app(security_policy, pyramid_config):
+    pyramid_config.set_token_authentication(
+        long_term_token_model=Token,
+        project_prefix=pyramid_config.registry.settings["project_prefix"],
+        login_callback=login_callback,
+        jwk_resolver=jwk_resolver,
+        security_policy=security_policy(),
+        user_model=User,
+        multi_factor_auth_method_model=MultiFactorAuthenticationMethod,
+    )
+    pyramid_config.add_route("home", "/")
+    pyramid_config.add_view(
+        home_view,
+        route_name="home",
+        renderer="json",
+        permission="view",
+    )
+    pyramid_config.scan("tests.services.security.subscribers.auth_subscribers")
+    app = pyramid_config.make_wsgi_app()
+    yield app
+
+
+@pytest.fixture()
+def pyramid_event_request(pyramid_event_app, db_engine):
+    with pyramid_event_app.request_context({}) as request:
+        setUp(registry=request.registry, request=request)
+        yield request
+    tearDown()
+
+
+@pytest.fixture()
+def pyramid_event_app(pyramid_config):
+    pyramid_config.set_token_authentication(
+        long_term_token_model=Token,
+        project_prefix=pyramid_config.registry.settings["project_prefix"],
+        login_callback=login_callback,
+        jwk_resolver=jwk_resolver,
+        security_policy=TokenAuthenticationPolicy,
+        user_model=User,
+        multi_factor_auth_method_model=MultiFactorAuthenticationMethod,
+    )
+    pyramid_config.add_route("home", "/")
+    pyramid_config.add_view(
+        home_view,
+        route_name="home",
+        renderer="json",
+        permission="view",
+    )
+    pyramid_config.scan("tests.services.security.subscribers.auth_subscribers")
+    app = pyramid_config.make_wsgi_app()
     yield app
