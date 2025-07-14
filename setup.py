@@ -25,6 +25,7 @@ dev_requires = (
     psycopg2
     requests==2.32.3
     qrcode[pil]>=8.0,<9.0
+    structlog>=25.4.0
 """.split()
     + auth_requires
 )
