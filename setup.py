@@ -6,7 +6,6 @@ here = Path(__file__).parent
 README = (here / "README.md").read_text()
 CHANGES = (here / "CHANGES.md").read_text()
 
-
 requires = """
     pyramid>=1.9
     passlib
@@ -14,7 +13,23 @@ requires = """
     pyramid_di
 """.split()
 
-dev_requires = ["pytest"]
+auth_requires = [
+    "pyjwt",
+    "pyotp",
+    "qrcode[pil]>=8.0,<9.0",
+    "requests>=2.28",
+    "structlog>=25.4.0",
+]
+
+dev_requires = """
+    pytest
+    pytest-cov
+    webtest
+    pyramid_tm
+    zope.sqlalchemy
+    pre-commit
+    psycopg2-binary
+""".split() + auth_requires
 
 setup(
     name="tet",
@@ -47,5 +62,8 @@ setup(
     zip_safe=False,
     test_suite="tet",
     install_requires=requires,
-    extras_require={"dev": dev_requires},
+    extras_require={
+        "auth": auth_requires,
+        "dev": dev_requires,
+    },
 )

@@ -65,7 +65,7 @@ def setup_sqlalchemy(
     settings: Optional[dict] = _NOT_SET,
     prefix: str = "sqlalchemy.",
     engine: Optional["sqlalchemy.Engine"] = _NOT_SET,
-    name: str = ""
+    name: str = "",
 ) -> None:
     """
     Sets up SQLAlchemy, creating a request scoped service for the ORM session.
