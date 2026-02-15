@@ -13,22 +13,23 @@ requires = """
     pyramid_di
 """.split()
 
-auth_requires = ["pyjwt"]
+auth_requires = [
+    "pyjwt",
+    "pyotp",
+    "qrcode[pil]>=8.0,<9.0",
+    "requests>=2.28",
+    "structlog>=25.4.0",
+]
 
-dev_requires = (
-    """
+dev_requires = """
     pytest
+    pytest-cov
     webtest
     pyramid_tm
-    zope.sqlalchemy 
+    zope.sqlalchemy
     pre-commit
-    psycopg2
-    requests==2.32.3
-    qrcode[pil]>=8.0,<9.0
-    structlog>=25.4.0
-""".split()
-    + auth_requires
-)
+    psycopg2-binary
+""".split() + auth_requires
 
 setup(
     name="tet",
@@ -62,6 +63,7 @@ setup(
     test_suite="tet",
     install_requires=requires,
     extras_require={
+        "auth": auth_requires,
         "dev": dev_requires,
     },
 )
