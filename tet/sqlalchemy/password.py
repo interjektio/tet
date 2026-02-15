@@ -1,6 +1,5 @@
 import sqlalchemy as sa
 from sqlalchemy import orm as orm
-from sqlalchemy.ext import declarative
 
 from ..util.crypt import crypt, verify
 
@@ -21,6 +20,6 @@ class UserPasswordMixin(object):
 
         return verify(password, self._password)
 
-    @declarative.declared_attr
+    @orm.declared_attr
     def password(cls):
         return orm.synonym("_password", descriptor=property(cls._get_password, cls._set_password))
