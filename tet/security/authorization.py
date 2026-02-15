@@ -45,7 +45,7 @@ class AuthorizationPolicyWrapper:
 def includeme(config: Configurator):
     def set_authorization_policy(config: Configurator, policy: Any) -> None:
         policy = config.maybe_dotted(policy)
-        if isinstance(policy, INewAuthorizationPolicy):
+        if INewAuthorizationPolicy.providedBy(policy):
             policy = AuthorizationPolicyWrapper(policy)
 
         # noinspection PyCallByClass
