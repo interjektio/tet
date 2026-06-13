@@ -28,6 +28,9 @@ jobs:
           - "3.11"
           - "3.12"
           - "3.13"
+        pyramid-version:
+          - "~=1.9.0"
+          - "~=2.0"
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -39,6 +42,7 @@ jobs:
         run: |
           pip install 'setuptools<82'
           pip install -e '.[dev]'
+          pip install 'pyramid${{ matrix.pyramid-version }}'
       - name: Run tests with coverage
         run: |
           pytest --cov=tet --cov-report=term-missing --cov-report=xml:coverage.xml -v
