@@ -7,12 +7,19 @@ import jwt as pyjwt
 import pyotp
 import pytest
 import requests as req_lib
-from pyramid.httpexceptions import HTTPBadRequest, HTTPForbidden, HTTPInternalServerError, HTTPUnauthorized
+from pyramid.httpexceptions import (
+    HTTPBadRequest,
+    HTTPForbidden,
+    HTTPInternalServerError,
+    HTTPUnauthorized,
+)
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 from webtest import TestApp
 
-from tests.models.accounts import MultiFactorAuthenticationMethod, User
+from pyramid.exceptions import ConfigurationError
+
+from tests.models.accounts import MultiFactorAuthenticationMethod, Token, User
 from tests.services.constants import LOGIN_ENDPOINT, ACCESS_TOKEN_HEADER_NAME, HOME_ROUTE
 from tests.services.utils.authentication import get_cookie
 from tet.security.auth import TetAuthService
@@ -50,7 +57,9 @@ def create_user(db_session: Session):
         db_session.flush()
         return user
 
-    user = User(email="exampple2@invalid.invalid", name="example2", display_name="example2", is_admin=True)
+    user = User(
+        email="exampple2@invalid.invalid", name="example2", display_name="example2", is_admin=True
+    )
     user.password = "1234@abcd"
     db_session.add(user)
     db_session.flush()
@@ -108,7 +117,9 @@ def test_login_view_should_return_long_term_token(pyramid_test_app, capture_toke
     assert len(refresh_token) > 0
 
 
-def test_login_should_return_refresh_token_in_body(pyramid_test_app, capture_token, pyramid_request):
+def test_login_should_return_refresh_token_in_body(
+    pyramid_test_app, capture_token, pyramid_request
+):
     data = json.dumps({"user_identity": "exampple2@invalid.invalid", "password": "1234@abcd"})
     response = pyramid_test_app.post(
         url=LOGIN_ENDPOINT,
@@ -184,7 +195,9 @@ def test_it_should_store_the_token_in_the_database(
     assert isinstance(refresh_token, str)
     assert len(refresh_token) > 0
 
-    token = tet_token_service.retrieve_and_validate_token(token=refresh_token, prefix=project_prefix)
+    token = tet_token_service.retrieve_and_validate_token(
+        token=refresh_token, prefix=project_prefix
+    )
     assert token is not None
 
 
@@ -231,7 +244,9 @@ def test_verify_jwt_returns_none_for_invalid_signature(token_service):
         "exp": datetime.now(timezone.utc) + timedelta(hours=1),
         "iat": datetime.now(timezone.utc),
     }
-    bad_token = pyjwt.encode(wrong_payload, "wrong-secret-key-at-least-32-bytes!", algorithm="HS256")
+    bad_token = pyjwt.encode(
+        wrong_payload, "wrong-secret-key-at-least-32-bytes!", algorithm="HS256"
+    )
     result = token_service.verify_jwt(bad_token)
     assert result is None
 
@@ -282,8 +297,10 @@ def test_refresh_token_from_request_body(pyramid_test_app, capture_token, pyrami
 
 def test_breach_api_timeout_graceful_degradation(pyramid_request):
     """Breach API timeout should return False, not crash."""
+    pyramid_request.registry.tet_auth_pwned_passwords_api_url = (
+        "https://api.pwnedpasswords.com/range/"
+    )
     auth_service = TetAuthService(request=pyramid_request)
-    pyramid_request.registry.settings["pwned_passwords_api_url"] = "https://api.pwnedpasswords.com/range/"
 
     with patch("tet.security.auth.requests.get", side_effect=req_lib.ConnectionError("timeout")):
         result = auth_service.is_password_breached("test_password_123")
@@ -302,7 +319,8 @@ def test_retrieve_token_with_invalid_prefix(token_service, pyramid_request):
 def test_retrieve_token_not_found_in_db(token_service, capture_token, pyramid_request, db_session):
     """Token ID not in DB should raise ValueError."""
     # Create a valid-looking token with a non-existent ID
-    import secrets, hashlib
+    import secrets
+    import hashlib
     from tet.security.config import TOKEN_ID_BYTE_LENGTH
 
     prefix = pyramid_request.registry.settings["project_prefix"]
@@ -315,7 +333,9 @@ def test_retrieve_token_not_found_in_db(token_service, capture_token, pyramid_re
         token_service.retrieve_and_validate_token(token=fake_token, prefix=prefix)
 
 
-def test_retrieve_token_with_wrong_secret(token_service, capture_token, pyramid_request, db_session):
+def test_retrieve_token_with_wrong_secret(
+    token_service, capture_token, pyramid_request, db_session
+):
     """Token with wrong secret should raise ValueError."""
     import secrets
     from tet.security.config import TOKEN_ID_BYTE_LENGTH
@@ -325,7 +345,7 @@ def test_retrieve_token_with_wrong_secret(token_service, capture_token, pyramid_
 
     # Create a real token to get a valid token ID
     real_token = token_service.create_long_term_token(user_id=user.id, project_prefix=prefix)
-    payload_hex = real_token[len(prefix):]
+    payload_hex = real_token[len(prefix) :]
     payload_bytes = bytes.fromhex(payload_hex)
     token_id_bytes = payload_bytes[:TOKEN_ID_BYTE_LENGTH]
 
@@ -352,12 +372,17 @@ def auth_service(pyramid_request):
     return pyramid_request.find_service(TetAuthService)
 
 
-def test_validate_and_create_jwt(auth_service, capture_token, pyramid_test_app, pyramid_request, db_session):
+def test_validate_and_create_jwt(
+    auth_service, capture_token, pyramid_test_app, pyramid_request, db_session
+):
     """validate_and_create_jwt should return a valid JWT from a refresh token."""
     create_user(db_session)
     data = json.dumps({"user_identity": "exampple2@invalid.invalid", "password": "1234@abcd"})
     login_response = pyramid_test_app.post(
-        LOGIN_ENDPOINT, params=data, content_type="application/json", status=200,
+        LOGIN_ENDPOINT,
+        params=data,
+        content_type="application/json",
+        status=200,
     )
     refresh_token = login_response.json["refresh_token"]
     access_token = auth_service.validate_and_create_jwt(refresh_token=refresh_token)
@@ -402,11 +427,14 @@ def test_assess_password_strength():
 
 def test_is_password_breached_returns_true_when_found(pyramid_request):
     """Should return True when password hash suffix is found in API response."""
+    pyramid_request.registry.tet_auth_pwned_passwords_api_url = (
+        "https://api.pwnedpasswords.com/range/"
+    )
     auth_service = TetAuthService(request=pyramid_request)
-    pyramid_request.registry.settings["pwned_passwords_api_url"] = "https://api.pwnedpasswords.com/range/"
 
     # SHA1 of "password" starts with 5BAA6 -> suffix is 1E4C9B93F3F0682250B6CF8331B7EE68FD8
     import hashlib
+
     sha1 = hashlib.sha1(b"password").hexdigest().upper()
     suffix = sha1[5:]
 
@@ -420,11 +448,15 @@ def test_is_password_breached_returns_true_when_found(pyramid_request):
 
 def test_is_password_breached_returns_false_when_not_found(pyramid_request):
     """Should return False when password hash suffix is not in API response."""
+    pyramid_request.registry.tet_auth_pwned_passwords_api_url = (
+        "https://api.pwnedpasswords.com/range/"
+    )
     auth_service = TetAuthService(request=pyramid_request)
-    pyramid_request.registry.settings["pwned_passwords_api_url"] = "https://api.pwnedpasswords.com/range/"
 
     mock_response = MagicMock()
-    mock_response.text = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA0:1\nBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB0:2"
+    mock_response.text = (
+        "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA0:1\nBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB0:2"
+    )
     mock_response.raise_for_status = MagicMock()
 
     with patch("tet.security.auth.requests.get", return_value=mock_response):
@@ -435,7 +467,9 @@ def test_change_password_success(auth_service, db_session):
     """Successful password change."""
     user = create_user(db_session)
     user.verify_password = user.validate_password
-    payload = PasswordChangeData(current_password="1234@abcd", new_password="new_secure_password_123")
+    payload = PasswordChangeData(
+        current_password="1234@abcd", new_password="new_secure_password_123"
+    )
 
     with patch.object(auth_service, "is_password_breached", return_value=False):
         result = auth_service.change_password(payload=payload, user=user)
@@ -446,7 +480,9 @@ def test_change_password_wrong_current_password(auth_service, db_session):
     """Wrong current password should raise ValueError."""
     user = create_user(db_session)
     user.verify_password = user.validate_password
-    payload = PasswordChangeData(current_password="wrong_password", new_password="new_secure_password_123")
+    payload = PasswordChangeData(
+        current_password="wrong_password", new_password="new_secure_password_123"
+    )
 
     with patch.object(auth_service, "is_password_breached", return_value=False):
         with pytest.raises(ValueError, match="INVALID_CREDENTIALS"):
@@ -460,14 +496,18 @@ def test_change_password_too_short(auth_service, db_session):
     payload = PasswordChangeData(current_password="1234@abcd", new_password="short")
 
     with patch.object(auth_service, "is_password_breached", return_value=False):
-        with pytest.raises(ValueError, match="PASSWORD_STRENGTH_TOO_WEAK|INCORRECT_PASSWORD_LENGTH"):
+        with pytest.raises(
+            ValueError, match="PASSWORD_STRENGTH_TOO_WEAK|INCORRECT_PASSWORD_LENGTH"
+        ):
             auth_service.change_password(payload=payload, user=user)
 
 
 def test_change_password_breached(auth_service, db_session):
     """Breached password should raise ValueError."""
     user = create_user(db_session)
-    payload = PasswordChangeData(current_password="1234@abcd", new_password="new_secure_password_123")
+    payload = PasswordChangeData(
+        current_password="1234@abcd", new_password="new_secure_password_123"
+    )
 
     with patch.object(auth_service, "is_password_breached", return_value=True):
         with pytest.raises(ValueError, match="PASSWORD_LEAKED"):
@@ -486,7 +526,10 @@ def test_refresh_token_from_cookie(pyramid_test_app, capture_token, pyramid_requ
     """Refresh token in cookie should work for token refresh."""
     data = json.dumps({"user_identity": "exampple2@invalid.invalid", "password": "1234@abcd"})
     login_resp = pyramid_test_app.post(
-        LOGIN_ENDPOINT, params=data, content_type="application/json", status=200,
+        LOGIN_ENDPOINT,
+        params=data,
+        content_type="application/json",
+        status=200,
     )
     refresh_token = login_resp.json["refresh_token"]
 
@@ -504,15 +547,22 @@ def test_refresh_token_from_cookie(pyramid_test_app, capture_token, pyramid_requ
     assert "access_token" in response.json
 
 
-def test_login_mfa_required_returns_mfa_flag(pyramid_test_app, capture_token, pyramid_request, db_session):
+def test_login_mfa_required_returns_mfa_flag(
+    pyramid_test_app, capture_token, pyramid_request, db_session
+):
     """When MFA is enabled and no TOTP token provided, should return mfa_required."""
     create_user(db_session)
     from tet.security.mfa import TetMultiFactorAuthenticationService
 
-    with patch.object(TetMultiFactorAuthenticationService, "is_totp_mfa_enabled", return_value=True):
+    with patch.object(
+        TetMultiFactorAuthenticationService, "is_totp_mfa_enabled", return_value=True
+    ):
         data = json.dumps({"user_identity": "exampple2@invalid.invalid", "password": "1234@abcd"})
         response = pyramid_test_app.post(
-            LOGIN_ENDPOINT, params=data, content_type="application/json", status=200,
+            LOGIN_ENDPOINT,
+            params=data,
+            content_type="application/json",
+            status=200,
         )
     assert response.json["success"] is True
     assert response.json.get("mfa_required") is True
@@ -524,7 +574,10 @@ def test_logout_endpoint(pyramid_test_app, capture_token, pyramid_request, db_se
     create_user(db_session)
     data = json.dumps({"user_identity": "exampple2@invalid.invalid", "password": "1234@abcd"})
     login_resp = pyramid_test_app.post(
-        LOGIN_ENDPOINT, params=data, content_type="application/json", status=200,
+        LOGIN_ENDPOINT,
+        params=data,
+        content_type="application/json",
+        status=200,
     )
     access_token = login_resp.json["access_token"]
     refresh_token = login_resp.json["refresh_token"]
@@ -545,21 +598,28 @@ def test_change_password_endpoint(pyramid_test_app, capture_token, pyramid_reque
     """Change password via HTTP endpoint."""
     data = json.dumps({"user_identity": "exampple2@invalid.invalid", "password": "1234@abcd"})
     login_resp = pyramid_test_app.post(
-        LOGIN_ENDPOINT, params=data, content_type="application/json", status=200,
+        LOGIN_ENDPOINT,
+        params=data,
+        content_type="application/json",
+        status=200,
     )
     access_token = login_resp.json["access_token"]
     refresh_token = login_resp.json["refresh_token"]
     _set_refresh_cookie(pyramid_test_app, refresh_token)
 
     # Mock change_password to avoid actual DB mutation (unit-tested separately above)
-    with patch.object(TetAuthService, "change_password", return_value=True), \
-         patch.object(TetTokenService, "delete_other_tokens"):
+    with (
+        patch.object(TetAuthService, "change_password", return_value=True),
+        patch.object(TetTokenService, "delete_other_tokens"),
+    ):
         response = pyramid_test_app.post(
             "/api/v1/auth/users/me/password",
-            params=json.dumps({
-                "currentPassword": "1234@abcd",
-                "newPassword": "new_secure_password_123",
-            }),
+            params=json.dumps(
+                {
+                    "currentPassword": "1234@abcd",
+                    "newPassword": "new_secure_password_123",
+                }
+            ),
             headers={ACCESS_TOKEN_HEADER_NAME: f"Bearer {access_token}"},
             content_type="application/json",
             status=200,
@@ -567,23 +627,32 @@ def test_change_password_endpoint(pyramid_test_app, capture_token, pyramid_reque
     assert response.json["success"] is True
 
 
-def test_change_password_endpoint_wrong_current(pyramid_test_app, capture_token, pyramid_request, db_session):
+def test_change_password_endpoint_wrong_current(
+    pyramid_test_app, capture_token, pyramid_request, db_session
+):
     """Change password with wrong current password should return 403."""
     data = json.dumps({"user_identity": "exampple2@invalid.invalid", "password": "1234@abcd"})
     login_resp = pyramid_test_app.post(
-        LOGIN_ENDPOINT, params=data, content_type="application/json", status=200,
+        LOGIN_ENDPOINT,
+        params=data,
+        content_type="application/json",
+        status=200,
     )
     access_token = login_resp.json["access_token"]
     refresh_token = login_resp.json["refresh_token"]
     _set_refresh_cookie(pyramid_test_app, refresh_token)
 
-    with patch.object(TetAuthService, "change_password", side_effect=ValueError("INVALID_CREDENTIALS")):
+    with patch.object(
+        TetAuthService, "change_password", side_effect=ValueError("INVALID_CREDENTIALS")
+    ):
         response = pyramid_test_app.post(
             "/api/v1/auth/users/me/password",
-            params=json.dumps({
-                "currentPassword": "wrong_password",
-                "newPassword": "new_secure_password_123",
-            }),
+            params=json.dumps(
+                {
+                    "currentPassword": "wrong_password",
+                    "newPassword": "new_secure_password_123",
+                }
+            ),
             headers={ACCESS_TOKEN_HEADER_NAME: f"Bearer {access_token}"},
             content_type="application/json",
             status=403,
@@ -610,6 +679,7 @@ def _cleanup_mfa_methods(db_session, user_id):
 def clean_mfa(db_engine):
     """Clean up all MFA methods via committed transaction (visible to webtest)."""
     from sqlalchemy import text
+
     with db_engine.connect() as conn:
         conn.execute(text("DELETE FROM multi_factor_authentication_method"))
         conn.commit()
@@ -787,7 +857,8 @@ def test_handle_totp_verify_success(mfa_service, db_session):
     valid_token = pyotp.TOTP(secret).now()
 
     result = mfa_service.handle_totp_verify(
-        user_id=user.id, token=valid_token,
+        user_id=user.id,
+        token=valid_token,
     )
     assert result["success"] is True
 
@@ -808,12 +879,12 @@ def test_handle_totp_verify_invalid_token(mfa_service, db_session):
     user.display_name = "Test User"
     db_session.flush()
 
-    setup_result = mfa_service.handle_totp_setup(user=user, project_prefix="tet")
-    secret = setup_result["secret"]
+    mfa_service.handle_totp_setup(user=user, project_prefix="tet")
 
     with pytest.raises(HTTPForbidden):
         mfa_service.handle_totp_verify(
-            user_id=user.id, token="000000",
+            user_id=user.id,
+            token="000000",
         )
 
 
@@ -824,7 +895,8 @@ def test_handle_totp_verify_no_method(mfa_service, db_session):
 
     with pytest.raises(HTTPForbidden):
         mfa_service.handle_totp_verify(
-            user_id=user.id, token="123456",
+            user_id=user.id,
+            token="123456",
         )
 
 
@@ -843,7 +915,8 @@ def test_handle_totp_verify_missing_secret_in_db(mfa_service, db_session):
 
     with pytest.raises(HTTPBadRequest):
         mfa_service.handle_totp_verify(
-            user_id=user.id, token="123456",
+            user_id=user.id,
+            token="123456",
         )
 
 
@@ -863,14 +936,15 @@ def test_handle_totp_challenge_success(mfa_service, db_session, pyramid_request)
     db_session.flush()
 
     # Set up request body for the event notification
-    pyramid_request.body = json.dumps(
-        {"user_identity": "exampple2@invalid.invalid"}
-    ).encode("utf-8")
+    pyramid_request.body = json.dumps({"user_identity": "exampple2@invalid.invalid"}).encode(
+        "utf-8"
+    )
     pyramid_request.content_type = "application/json"
 
     valid_token = pyotp.TOTP(secret).now()
     result = mfa_service.handle_totp_challenge(
-        user_id=user.id, totp_token=valid_token,
+        user_id=user.id,
+        totp_token=valid_token,
     )
     assert result["success"] is True
     assert "access_token" in result
@@ -894,7 +968,8 @@ def test_handle_totp_challenge_invalid_token(mfa_service, db_session):
 
     with pytest.raises(HTTPForbidden):
         mfa_service.handle_totp_challenge(
-            user_id=user.id, totp_token="000000",
+            user_id=user.id,
+            totp_token="000000",
         )
 
 
@@ -905,7 +980,8 @@ def test_handle_totp_challenge_no_method(mfa_service, db_session):
 
     with pytest.raises(HTTPForbidden):
         mfa_service.handle_totp_challenge(
-            user_id=user.id, totp_token="123456",
+            user_id=user.id,
+            totp_token="123456",
         )
 
 
@@ -925,12 +1001,14 @@ def test_handle_totp_challenge_missing_secret_in_data(mfa_service, db_session):
 
     with pytest.raises(HTTPBadRequest):
         mfa_service.handle_totp_challenge(
-            user_id=user.id, totp_token="123456",
+            user_id=user.id,
+            totp_token="123456",
         )
 
 
 def test_generate_qr_img():
     """generate_qr_img should return a base64-encoded SVG."""
+
     class FakeUser:
         display_name = "Test User"
 
@@ -938,7 +1016,9 @@ def test_generate_qr_img():
     data = TOTPData(secret=secret, issuer="test")
 
     result = TetMultiFactorAuthenticationService.generate_qr_img(
-        user=FakeUser(), mfa_secret=secret, data=data,
+        user=FakeUser(),
+        mfa_secret=secret,
+        data=data,
     )
     decoded = base64.b64decode(result)
     assert b"svg" in decoded.lower()
@@ -983,7 +1063,9 @@ def test_mfa_setup_and_verify_flow(pyramid_test_app, capture_token, pyramid_requ
     assert verify_resp.json["success"] is True
 
 
-def test_mfa_get_methods_returns_active(pyramid_test_app, capture_token, pyramid_request, clean_mfa):
+def test_mfa_get_methods_returns_active(
+    pyramid_test_app, capture_token, pyramid_request, clean_mfa
+):
     """GET /mfa/methods should list active MFA methods after setup+verify."""
     login_resp = pyramid_test_app.post(
         LOGIN_ENDPOINT,
@@ -1104,11 +1186,13 @@ def test_login_with_totp_challenge(pyramid_test_app, capture_token, pyramid_requ
     totp_token = pyotp.TOTP(secret).now()
     mfa_login_resp = pyramid_test_app.post(
         LOGIN_ENDPOINT,
-        params=json.dumps({
-            "user_identity": "exampple2@invalid.invalid",
-            "password": "1234@abcd",
-            "totp_token": totp_token,
-        }),
+        params=json.dumps(
+            {
+                "user_identity": "exampple2@invalid.invalid",
+                "password": "1234@abcd",
+                "totp_token": totp_token,
+            }
+        ),
         content_type="application/json",
         status=200,
     )
@@ -1117,7 +1201,9 @@ def test_login_with_totp_challenge(pyramid_test_app, capture_token, pyramid_requ
     assert "refresh_token" in mfa_login_resp.json
 
 
-def test_login_without_totp_returns_mfa_required(pyramid_test_app, capture_token, pyramid_request, clean_mfa):
+def test_login_without_totp_returns_mfa_required(
+    pyramid_test_app, capture_token, pyramid_request, clean_mfa
+):
     """Login without TOTP token should return mfa_required when MFA is enabled."""
     # Login and setup TOTP
     login_resp = pyramid_test_app.post(
@@ -1149,10 +1235,12 @@ def test_login_without_totp_returns_mfa_required(pyramid_test_app, capture_token
     # Login WITHOUT totp_token -> should get mfa_required
     mfa_login_resp = pyramid_test_app.post(
         LOGIN_ENDPOINT,
-        params=json.dumps({
-            "user_identity": "exampple2@invalid.invalid",
-            "password": "1234@abcd",
-        }),
+        params=json.dumps(
+            {
+                "user_identity": "exampple2@invalid.invalid",
+                "password": "1234@abcd",
+            }
+        ),
         content_type="application/json",
         status=200,
     )
@@ -1178,7 +1266,8 @@ def test_handle_totp_verify_key_error(mfa_service, db_session):
     ):
         with pytest.raises(HTTPBadRequest):
             mfa_service.handle_totp_verify(
-                user_id=user.id, token="123456",
+                user_id=user.id,
+                token="123456",
             )
 
 
@@ -1196,7 +1285,8 @@ def test_handle_totp_verify_generic_exception(mfa_service, db_session):
     ):
         with pytest.raises(HTTPInternalServerError):
             mfa_service.handle_totp_verify(
-                user_id=user.id, token="123456",
+                user_id=user.id,
+                token="123456",
             )
 
 
@@ -1231,7 +1321,9 @@ def test_login_key_error_returns_400(pyramid_test_app, capture_token, pyramid_re
     with patch.object(TetTokenService, "create_long_term_token", side_effect=KeyError("field")):
         response = pyramid_test_app.post(
             LOGIN_ENDPOINT,
-            params=json.dumps({"user_identity": "exampple2@invalid.invalid", "password": "1234@abcd"}),
+            params=json.dumps(
+                {"user_identity": "exampple2@invalid.invalid", "password": "1234@abcd"}
+            ),
             content_type="application/json",
             status=400,
             expect_errors=True,
@@ -1241,10 +1333,14 @@ def test_login_key_error_returns_400(pyramid_test_app, capture_token, pyramid_re
 
 def test_login_generic_exception_returns_500(pyramid_test_app, capture_token, pyramid_request):
     """Generic exception inside login try block should return 500."""
-    with patch.object(TetTokenService, "create_long_term_token", side_effect=RuntimeError("unexpected")):
+    with patch.object(
+        TetTokenService, "create_long_term_token", side_effect=RuntimeError("unexpected")
+    ):
         response = pyramid_test_app.post(
             LOGIN_ENDPOINT,
-            params=json.dumps({"user_identity": "exampple2@invalid.invalid", "password": "1234@abcd"}),
+            params=json.dumps(
+                {"user_identity": "exampple2@invalid.invalid", "password": "1234@abcd"}
+            ),
             content_type="application/json",
             status=500,
             expect_errors=True,
@@ -1368,8 +1464,10 @@ def test_revoke_other_tokens_success(pyramid_test_app, capture_token, pyramid_re
     )
     access_token = login_resp.json["access_token"]
 
-    with patch.object(TetAuthService, "verify_password", return_value=True), \
-         patch.object(TetTokenService, "delete_other_tokens"):
+    with (
+        patch.object(TetAuthService, "verify_password", return_value=True),
+        patch.object(TetTokenService, "delete_other_tokens"),
+    ):
         response = pyramid_test_app.delete(
             "/api/v1/auth/users/me/tokens/others",
             params=json.dumps({"password": "1234@abcd"}),
@@ -1412,8 +1510,10 @@ def test_revoke_other_tokens_generic_exception(pyramid_test_app, capture_token, 
     )
     access_token = login_resp.json["access_token"]
 
-    with patch.object(TetAuthService, "verify_password", return_value=True), \
-         patch.object(TetTokenService, "delete_other_tokens", side_effect=RuntimeError("fail")):
+    with (
+        patch.object(TetAuthService, "verify_password", return_value=True),
+        patch.object(TetTokenService, "delete_other_tokens", side_effect=RuntimeError("fail")),
+    ):
         response = pyramid_test_app.delete(
             "/api/v1/auth/users/me/tokens/others",
             params=json.dumps({"password": "1234@abcd"}),
@@ -1569,7 +1669,9 @@ def test_revoke_other_tokens_user_not_found(pyramid_test_app, capture_token, pyr
     assert response.status_code == 401
 
 
-def test_get_mfa_methods_http_exception(pyramid_test_app, capture_token, pyramid_request, clean_mfa):
+def test_get_mfa_methods_http_exception(
+    pyramid_test_app, capture_token, pyramid_request, clean_mfa
+):
     """HTTPException in get_mfa_methods should be re-raised."""
     login_resp = pyramid_test_app.post(
         LOGIN_ENDPOINT,
@@ -1593,7 +1695,9 @@ def test_get_mfa_methods_http_exception(pyramid_test_app, capture_token, pyramid
     assert response.status_code == 403
 
 
-def test_generate_mfa_totp_non_totp_method(pyramid_test_app, capture_token, pyramid_request, clean_mfa):
+def test_generate_mfa_totp_non_totp_method(
+    pyramid_test_app, capture_token, pyramid_request, clean_mfa
+):
     """generate_mfa_totp with non-TOTP method_type should return 400."""
     login_resp = pyramid_test_app.post(
         LOGIN_ENDPOINT,
@@ -1614,7 +1718,9 @@ def test_generate_mfa_totp_non_totp_method(pyramid_test_app, capture_token, pyra
     assert response.status_code == 400
 
 
-def test_generate_mfa_totp_http_exception(pyramid_test_app, capture_token, pyramid_request, clean_mfa):
+def test_generate_mfa_totp_http_exception(
+    pyramid_test_app, capture_token, pyramid_request, clean_mfa
+):
     """HTTPException in generate_mfa_totp should be re-raised."""
     login_resp = pyramid_test_app.post(
         LOGIN_ENDPOINT,
@@ -1770,35 +1876,43 @@ def test_totp_replay_protection_blocks_reuse(mfa_service, db_session, pyramid_re
         )
 
 
-def test_totp_replay_check_and_record(mfa_service, db_session):
-    """_check_totp_replay + _record_totp_use should block the same time step."""
+def test_totp_replay_high_water_mark(mfa_service, db_session):
+    """_enforce_totp_replay keeps one row per user and blocks reused/older steps."""
+    from tests.models.accounts import TOTPReplayState
+
     user = create_user(db_session)
-    time_step = 99999999
+    _cleanup_mfa_methods(db_session, user.id)
 
-    # First use — should not raise
-    mfa_service._check_totp_replay(user.id, time_step)
-    mfa_service._record_totp_use(user.id, time_step)
+    # First use records the high-water mark (one row, created on demand).
+    mfa_service._enforce_totp_replay(user.id, 1000)
     db_session.flush()
+    rows = db_session.query(TOTPReplayState).filter_by(user_id=user.id).all()
+    assert len(rows) == 1
+    assert rows[0].last_used_time_step == 1000
 
-    # Second use — same time step — should raise
+    # Same step — replay — blocked.
     with pytest.raises(HTTPForbidden):
-        mfa_service._check_totp_replay(user.id, time_step)
+        mfa_service._enforce_totp_replay(user.id, 1000)
 
+    # Older step — blocked.
+    with pytest.raises(HTTPForbidden):
+        mfa_service._enforce_totp_replay(user.id, 999)
 
-def test_totp_replay_cleanup(mfa_service, db_session):
-    """cleanup_used_codes should delete old entries."""
-    from tests.models.accounts import TOTPUsedCode
-
-    user = create_user(db_session)
-    used = TOTPUsedCode()
-    used.user_id = user.id
-    used.time_step = 1
-    used.used_at = datetime.now(timezone.utc) - timedelta(seconds=300)
-    db_session.add(used)
+    # Newer step — accepted, updated in place (still a single row).
+    mfa_service._enforce_totp_replay(user.id, 1001)
     db_session.flush()
+    rows = db_session.query(TOTPReplayState).filter_by(user_id=user.id).all()
+    assert len(rows) == 1
+    assert rows[0].last_used_time_step == 1001
 
-    count = mfa_service.cleanup_used_codes(older_than_seconds=120)
-    assert count == 1
+
+def test_totp_replay_disabled_when_no_model(mfa_service, db_session):
+    """With no replay-state model configured the check is a no-op."""
+    user = create_user(db_session)
+    mfa_service.totp_replay_state_model = None
+    # Must not raise and must not touch the database.
+    mfa_service._enforce_totp_replay(user.id, 1)
+    mfa_service._enforce_totp_replay(user.id, 1)
 
 
 # --- Rate limiting ---
@@ -1813,7 +1927,9 @@ def test_rate_limit_blocks_excessive_login(pyramid_test_app, capture_token, pyra
     for _ in range(2):
         pyramid_test_app.post(
             LOGIN_ENDPOINT,
-            params=json.dumps({"user_identity": "exampple2@invalid.invalid", "password": "1234@abcd"}),
+            params=json.dumps(
+                {"user_identity": "exampple2@invalid.invalid", "password": "1234@abcd"}
+            ),
             content_type="application/json",
             status=200,
         )
@@ -1879,3 +1995,67 @@ def test_cleanup_expired_tokens(token_service, db_session):
     # Valid token should still work
     result = token_service.retrieve_and_validate_token(token=valid_token, prefix="tet")
     assert result is not None
+
+
+# --- Breach check is opt-in (HIBP not required) ---
+
+
+def test_is_password_breached_disabled_when_no_url(pyramid_request):
+    """With no API URL configured the breach check is skipped and never calls out."""
+    pyramid_request.registry.tet_auth_pwned_passwords_api_url = None
+    auth_service = TetAuthService(request=pyramid_request)
+
+    with patch("tet.security.auth.requests.get") as mock_get:
+        result = auth_service.is_password_breached("password")
+
+    assert result is False
+    mock_get.assert_not_called()
+
+
+# --- Configuration-time parameter validation ---
+
+
+def _valid_token_auth_kwargs(**overrides):
+    kwargs = dict(
+        long_term_token_model=Token,
+        multi_factor_auth_method_model=MultiFactorAuthenticationMethod,
+        user_model=User,
+        project_prefix="tet",
+        login_callback=lambda request: None,
+        jwk_resolver=lambda request: "secret",
+    )
+    kwargs.update(overrides)
+    return kwargs
+
+
+@pytest.mark.parametrize(
+    "overrides, match",
+    [
+        ({"long_term_token_model": None}, "long_term_token_model"),
+        ({"multi_factor_auth_method_model": None}, "multi_factor_auth_method_model"),
+        ({"user_model": None}, "user_model"),
+        ({"project_prefix": ""}, "project_prefix"),
+        ({"project_prefix": 123}, "project_prefix"),
+        ({"login_callback": "not-callable"}, "login_callback"),
+        ({"jwk_resolver": None}, "jwk_resolver"),
+        ({"user_id_column": ""}, "user_id_column"),
+        ({"jwt_algorithm": ""}, "jwt_algorithm"),
+        ({"jwt_token_expiration_mins": 0}, "jwt_token_expiration_mins"),
+        ({"jwt_token_expiration_mins": -5}, "jwt_token_expiration_mins"),
+        ({"long_term_token_expiration_mins": True}, "long_term_token_expiration_mins"),
+        ({"login_rate_limit_max_attempts": 0}, "login_rate_limit_max_attempts"),
+        ({"login_rate_limit_window_seconds": -1}, "login_rate_limit_window_seconds"),
+        ({"security_policy": None}, "security_policy"),
+        ({"pwned_passwords_api_url": ""}, "pwned_passwords_api_url"),
+        ({"pwned_passwords_api_url": 42}, "pwned_passwords_api_url"),
+    ],
+)
+def test_set_token_authentication_rejects_invalid_params(pyramid_config, overrides, match):
+    """Invalid configuration must raise ConfigurationError at setup time."""
+    with pytest.raises(ConfigurationError, match=match):
+        pyramid_config.set_token_authentication(**_valid_token_auth_kwargs(**overrides))
+
+
+def test_set_token_authentication_accepts_valid_params(pyramid_config):
+    """A fully valid configuration must not raise."""
+    pyramid_config.set_token_authentication(**_valid_token_auth_kwargs())

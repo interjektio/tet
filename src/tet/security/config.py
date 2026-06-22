@@ -28,6 +28,7 @@ MFA_REQUIRED_KEY = "mfa_required"
 TOKEN_ID_BYTE_LENGTH = 8
 DEFAULT_LOGIN_RATE_LIMIT_MAX_ATTEMPTS = 10
 DEFAULT_LOGIN_RATE_LIMIT_WINDOW_SECONDS = 300
+DEFAULT_PWNED_PASSWORDS_API_URL = None
 
 
 @dataclasses.dataclass
@@ -98,7 +99,9 @@ class JWTRegisteredClaims:
         Returns:
             dict[str, Any]: A dictionary representation of the registered claims.
         """
-        return {k: v for k, v in dataclasses.asdict(self).items() if v is not None and k != "leeway"}
+        return {
+            k: v for k, v in dataclasses.asdict(self).items() if v is not None and k != "leeway"
+        }
 
 
 @dataclasses.dataclass
@@ -163,17 +166,26 @@ class AuthLoginResult:
     """
     Dataclass for storing login data.
 
+    Note:
+        ``user_id`` and ``named_identity`` are two different things.  ``user_id``
+        is the internal primary key used to look up tokens and authorise
+        requests.  ``named_identity`` is the *named identity* the user logged in
+        with -- an email address, username, etc. -- and is used only for
+        logging and auditing (it is the value carried by the ``AuthnLogin*``
+        events).  Never use ``named_identity`` where a real ``user_id`` is
+        expected.
+
     Attributes:
-        user_id: Unique identifier of the user.
+        user_id: Internal unique identifier (primary key) of the user.
         totp_token: Optional TOTP (Time-based One-Time Password) token for MFA.
-        user_identity: Optional user identity (e.g., email, username, or id).
+        named_identity: Optional human/named identity (e.g., email or username).
         mfa_required_key: Key indicating if MFA is required.
         success: Boolean indicating whether the login was successful.
     """
 
     user_id: tp.Any
     totp_token: tp.Optional[str] = None
-    user_identity: tp.Optional[str] = None
+    named_identity: tp.Optional[str] = None
     mfa_required_key: str = MFA_REQUIRED_KEY
     success: bool = False
 

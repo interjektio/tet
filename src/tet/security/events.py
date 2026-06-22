@@ -88,27 +88,27 @@ class AuthnPasswordChangeFail(TetAuthEvent):
 @dataclasses.dataclass()
 class AuthnLoginSuccess(TetAuthEvent):
     """
-    AuthnLoginSuccess[:user_identity]
+    AuthnLoginSuccess[:named_identity]
     Event for successful login.
 
     Attributes:
-        user_identity (Any): Identifier of the user.
+        named_identity (Any): Named identity (email/username) the user logged in with.
     """
 
-    user_identity: tp.Any
+    named_identity: tp.Any
 
 
 @dataclasses.dataclass()
 class AuthnLoginFail(TetAuthEvent):
     """
-    AuthnLoginFail[:user_identity]
+    AuthnLoginFail[:named_identity]
     Event for failed login attempt.
 
     Attributes:
-        user_identity (Any): Identifier of the user.
+        named_identity (Any): Named identity (email/username) the user attempted to log in with.
     """
 
-    user_identity: tp.Any
+    named_identity: tp.Any
 
 
 # Logout events

@@ -16,7 +16,7 @@ from tet.security.config import (
 from tet.security.models import (
     MultiFactorAuthenticationMethodMixin,
     RateLimitAttemptMixin,
-    TOTPUsedCodeMixin,
+    TOTPReplayStateMixin,
     TokenMixin,
 )
 from tet.security.policy import TokenAuthenticationPolicy
@@ -45,7 +45,7 @@ __all__ = [
     "TetRateLimitService",
     "TetTokenService",
     "TOTPData",
-    "TOTPUsedCodeMixin",
+    "TOTPReplayStateMixin",
     "TokenAuthenticationPolicy",
     "TokenMixin",
 ]

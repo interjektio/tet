@@ -9,17 +9,17 @@ Example
 
 Creating a user model with password support::
 
-    from sqlalchemy import Column, Integer, String
-    from sqlalchemy.ext.declarative import declarative_base
+    from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
     from tet.sqlalchemy.password import UserPasswordMixin
 
-    Base = declarative_base()
+    class Base(DeclarativeBase):
+        pass
 
     class User(UserPasswordMixin, Base):
         __tablename__ = "users"
 
-        id = Column(Integer, primary_key=True)
-        username = Column(String(100), unique=True, nullable=False)
+        id: Mapped[int] = mapped_column(primary_key=True)
+        username: Mapped[str] = mapped_column(unique=True)
 
 Using the password property::
 
@@ -45,7 +45,7 @@ class UserPasswordMixin:
     and a :meth:`validate_password` method for verification.
     """
 
-    _password = sa.Column("password", sa.Unicode, nullable=True)
+    _password: orm.Mapped[str | None] = orm.mapped_column("password", sa.Unicode)
 
     def _set_password(self, password):
         self._password = crypt(password)
@@ -69,6 +69,4 @@ class UserPasswordMixin:
     @orm.declared_attr
     def password(cls):
         """Password property that hashes on set and returns hash on get."""
-        return orm.synonym(
-            "_password", descriptor=property(cls._get_password, cls._set_password)
-        )
+        return orm.synonym("_password", descriptor=property(cls._get_password, cls._set_password))

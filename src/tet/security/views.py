@@ -54,6 +54,12 @@ class AuthViews:
         self.cookie_attributes: tp.Optional[CookieAttributes] = (
             self.registry.tet_auth_cookie_attributes
         )
+        self.login_rate_limit_max_attempts: int = (
+            self.registry.tet_auth_login_rate_limit_max_attempts
+        )
+        self.login_rate_limit_window_seconds: int = (
+            self.registry.tet_auth_login_rate_limit_window_seconds
+        )
 
     def _require_authenticated_userid(self) -> tp.Any:
         user_id = self.request.authenticated_userid
@@ -64,12 +70,8 @@ class AuthViews:
     def login(self) -> dict[str, tp.Any]:
         client_addr = self.request.client_addr or "unknown"
         rate_limit_key = f"login:{client_addr}"
-        max_attempts = getattr(
-            self.registry, "tet_auth_login_rate_limit_max_attempts", 10
-        )
-        window = getattr(
-            self.registry, "tet_auth_login_rate_limit_window_seconds", 300
-        )
+        max_attempts = self.login_rate_limit_max_attempts
+        window = self.login_rate_limit_window_seconds
         if self.rate_limit_service.check_rate_limit(rate_limit_key, max_attempts, window):
             raise HTTPTooManyRequests(
                 json_body={"message": "Too many login attempts. Please try again later."}
@@ -77,7 +79,7 @@ class AuthViews:
 
         auth_result: AuthLoginResult = self.login_callback(self.request)
         user_id = auth_result.user_id
-        user_identity = auth_result.user_identity
+        named_identity = auth_result.named_identity
         totp_token = auth_result.totp_token
         response_payload: dict[str, tp.Any] = {"success": True}
 
@@ -96,7 +98,9 @@ class AuthViews:
                     cookie_attributes=self.cookie_attributes,
                 )
 
-            refresh_token = self.token_service.create_long_term_token(user_id=user_id, project_prefix=self.project_prefix)
+            refresh_token = self.token_service.create_long_term_token(
+                user_id=user_id, project_prefix=self.project_prefix
+            )
             access_token = self.token_service.create_short_term_jwt(user_id)
 
             self.auth_service.set_cookies(
@@ -108,26 +112,26 @@ class AuthViews:
 
             self.registry.notify(
                 security_events.AuthnLoginSuccess(
-                    request=self.request, user_identity=user_identity
+                    request=self.request, named_identity=named_identity
                 )
             )
             return response_payload
 
         except KeyError as e:
             self.registry.notify(
-                security_events.AuthnLoginFail(request=self.request, user_identity=user_identity)
+                security_events.AuthnLoginFail(request=self.request, named_identity=named_identity)
             )
             logger.exception(f"Missing required field during login: {str(e)}")
             return HTTPBadRequest(json_body={"message": "Missing required field."})
         except HTTPException as e:
             self.registry.notify(
-                security_events.AuthnLoginFail(request=self.request, user_identity=user_identity)
+                security_events.AuthnLoginFail(request=self.request, named_identity=named_identity)
             )
             return e
         except Exception as e:
             logger.exception(f"Error during login: {str(e)}")
             self.registry.notify(
-                security_events.AuthnLoginFail(request=self.request, user_identity=user_identity)
+                security_events.AuthnLoginFail(request=self.request, named_identity=named_identity)
             )
             return HTTPInternalServerError(json_body={"message": "Login failed"})
 
@@ -145,16 +149,12 @@ class AuthViews:
         payload = self.request.json_body
         token = payload["token"]
         try:
-            return self.multi_factor_auth_service.handle_totp_verify(
-                user_id=user_id, token=token
-            )
+            return self.multi_factor_auth_service.handle_totp_verify(user_id=user_id, token=token)
         except HTTPException as e:
             raise e
         except Exception as e:
             logger.exception(f"Error verifying MFA: {e}")
-            raise HTTPInternalServerError(
-                json_body={"message": "Failed to verify MFA"}
-            ) from e
+            raise HTTPInternalServerError(json_body={"message": "Failed to verify MFA"}) from e
 
     def refresh_token(self) -> tp.Union[tp.Dict[str, tp.Any], HTTPUnauthorized]:
         refresh_token = self.request.cookies.get(self.long_term_token_cookie_name)
@@ -166,9 +166,7 @@ class AuthViews:
         if not refresh_token:
             raise HTTPUnauthorized(json_body={"message": DEFAULT_UNAUTHORIZED_MESSAGE})
 
-        access_token = self.auth_service.validate_and_create_jwt(
-            refresh_token=refresh_token
-        )
+        access_token = self.auth_service.validate_and_create_jwt(refresh_token=refresh_token)
         return {"success": True, "access_token": access_token}
 
     def change_password(self):
@@ -232,16 +230,12 @@ class AuthViews:
                 )
             )
             self.registry.notify(
-                security_events.AuthnLogoutSuccess(
-                    request=self.request, user_id=user_id
-                )
+                security_events.AuthnLogoutSuccess(request=self.request, user_id=user_id)
             )
             return {"success": True}
         except HTTPException as e:
             self.registry.notify(
-                security_events.AuthnLogoutFail(
-                    request=self.request, user_id=user_id
-                )
+                security_events.AuthnLogoutFail(request=self.request, user_id=user_id)
             )
             return e
         except SQLAlchemyError as e:
@@ -255,9 +249,7 @@ class AuthViews:
         except Exception as e:
             logger.exception(f"Error logging out: {e}")
             self.registry.notify(
-                security_events.AuthnLogoutFail(
-                    request=self.request, user_id=user_id
-                )
+                security_events.AuthnLogoutFail(request=self.request, user_id=user_id)
             )
             return HTTPForbidden(json_body={"message": "Failed to logout", "success": False})
 
@@ -365,7 +357,9 @@ class AuthViews:
                 return self.multi_factor_auth_service.handle_totp_setup(
                     user=user, project_prefix=self.project_prefix
                 )
-            raise HTTPBadRequest(json_body={"message": f"Unsupported MFA method type: {payload['method_type']}"})
+            raise HTTPBadRequest(
+                json_body={"message": f"Unsupported MFA method type: {payload['method_type']}"}
+            )
         except HTTPException as e:
             raise e
         except Exception as e:

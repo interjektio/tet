@@ -1,7 +1,8 @@
 from datetime import datetime
 
-from sqlalchemy import BigInteger, Column, DateTime, Integer, String, Enum, Boolean
+from sqlalchemy import BigInteger, DateTime, Enum, ForeignKey
 from sqlalchemy.dialects.postgresql import JSONB
+from sqlalchemy.orm import Mapped, declared_attr, mapped_column
 
 from tet.security.config import MultiFactorAuthMethodType, UTC
 
@@ -21,35 +22,61 @@ class MultiFactorAuthenticationMethodMixin:
     """
 
     __tablename__ = "multi_factor_authentication_method"
-    id = Column(Integer, primary_key=True)
-    method_type = Column(
+    id: Mapped[int] = mapped_column(primary_key=True)
+    method_type: Mapped[MultiFactorAuthMethodType] = mapped_column(
         Enum(MultiFactorAuthMethodType, values_callable=lambda cls: [e.value for e in cls]),
-        nullable=False,
         index=True,
     )
-    data = Column(JSONB, nullable=False, default=dict)
-    is_active = Column(Boolean, default=False, nullable=False)
-    verified = Column(Boolean, default=False, nullable=False)
-    created_at = Column(DateTime(True), default=lambda: datetime.now(UTC))
-    last_used_at = Column(DateTime(True), nullable=True)
+    data: Mapped[dict] = mapped_column(JSONB, default=dict)
+    is_active: Mapped[bool] = mapped_column(default=False)
+    verified: Mapped[bool] = mapped_column(default=False)
+    created_at: Mapped[datetime | None] = mapped_column(
+        DateTime(True), default=lambda: datetime.now(UTC)
+    )
+    last_used_at: Mapped[datetime | None] = mapped_column(DateTime(True))
 
     def mark_used(self):
         self.last_used_at = datetime.now(UTC)
 
 
-class TOTPUsedCodeMixin:
+class TOTPReplayStateMixin:
     """
-    Tracks used TOTP time steps to prevent replay attacks.
+    Per-user replay-protection state for TOTP: a single high-water-mark row
+    holding the most recent time-step accepted for the user.  A code is rejected
+    when its time-step is less than or equal to ``last_used_time_step``.
 
-    The consuming application must add a ``user_id`` foreign key column and
-    a unique constraint on ``(user_id, time_step)``.  The table should be
-    created as ``UNLOGGED`` for performance (``__table_args__ = {'prefixes': ['UNLOGGED']}``).
+    Unlike a used-code history, this stores **one row per user** (updated in
+    place), so it never grows and needs no periodic cleanup.
+
+    The mixin owns the primary key: ``user_id`` is a foreign key declared
+    ``primary_key=True``, so there is exactly one row per user by construction.
+    The application only supplies the foreign-key target (the user table's PK
+    name varies per app) via ``__user_id_fk__`` and marks the table
+    ``UNLOGGED`` -- ephemeral state that is safe to lose on a crash, kept out of
+    the write-ahead log so it adds no WAL traffic on the login path::
+
+        class TOTPReplayState(TOTPReplayStateMixin, Base):
+            __user_id_fk__ = "users.id"
+            __table_args__ = {"prefixes": ["UNLOGGED"]}
     """
 
-    __tablename__ = "totp_used_code"
-    id = Column(Integer, primary_key=True)
-    time_step = Column(BigInteger, nullable=False)
-    used_at = Column(DateTime(True), default=lambda: datetime.now(UTC))
+    __tablename__ = "totp_replay_state"
+
+    #: Application-supplied target of the ``user_id`` foreign key, e.g.
+    #: ``"users.id"``.  It cannot be hardcoded here because the user table name
+    #: is application-specific.
+    __user_id_fk__ = None
+
+    @declared_attr
+    def user_id(cls) -> Mapped[int]:
+        if not cls.__user_id_fk__:
+            raise TypeError(
+                f"{cls.__name__}: set __user_id_fk__ to the user primary key to "
+                'reference, e.g. __user_id_fk__ = "users.id"'
+            )
+        return mapped_column(ForeignKey(cls.__user_id_fk__), primary_key=True)
+
+    last_used_time_step: Mapped[int] = mapped_column(BigInteger)
 
 
 class RateLimitAttemptMixin:
@@ -61,9 +88,11 @@ class RateLimitAttemptMixin:
     """
 
     __tablename__ = "rate_limit_attempt"
-    id = Column(Integer, primary_key=True)
-    key = Column(String, nullable=False, index=True)
-    attempted_at = Column(DateTime(True), default=lambda: datetime.now(UTC), nullable=False)
+    id: Mapped[int] = mapped_column(primary_key=True)
+    key: Mapped[str] = mapped_column(index=True)
+    attempted_at: Mapped[datetime] = mapped_column(
+        DateTime(True), default=lambda: datetime.now(UTC)
+    )
 
 
 class TokenMixin:
@@ -83,7 +112,9 @@ class TokenMixin:
     """
 
     __tablename__ = "tokens"
-    id = Column(Integer, primary_key=True)
-    secret_hash = Column(String, nullable=False)
-    created_at = Column(DateTime(True), default=lambda: datetime.now(UTC))
-    expires_at = Column(DateTime(True), nullable=True)
+    id: Mapped[int] = mapped_column(primary_key=True)
+    secret_hash: Mapped[str] = mapped_column()
+    created_at: Mapped[datetime | None] = mapped_column(
+        DateTime(True), default=lambda: datetime.now(UTC)
+    )
+    expires_at: Mapped[datetime | None] = mapped_column(DateTime(True))

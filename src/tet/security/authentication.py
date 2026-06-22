@@ -1,6 +1,7 @@
 import typing as tp
 
 from pyramid.config import Configurator
+from pyramid.exceptions import ConfigurationError
 from zope.interface import Interface
 
 from tet.security.compat import NO_PERMISSION_REQUIRED
@@ -25,11 +26,12 @@ from tet.security.config import (
     DEFAULT_LOGIN_ATTR,
     DEFAULT_LOGIN_RATE_LIMIT_MAX_ATTEMPTS,
     DEFAULT_LOGIN_RATE_LIMIT_WINDOW_SECONDS,
+    DEFAULT_PWNED_PASSWORDS_API_URL,
 )
 from tet.security.models import (
     MultiFactorAuthenticationMethodMixin,
     RateLimitAttemptMixin,
-    TOTPUsedCodeMixin,
+    TOTPReplayStateMixin,
     TokenMixin,
 )
 from tet.security.policy import TokenAuthenticationPolicy
@@ -54,7 +56,7 @@ __all__ = [
     "TetRateLimitService",
     "TetTokenService",
     "TOTPData",
-    "TOTPUsedCodeMixin",
+    "TOTPReplayStateMixin",
     "TokenAuthenticationPolicy",
     "TokenMixin",
     "RateLimitAttemptMixin",
@@ -62,6 +64,72 @@ __all__ = [
 ]
 
 DEFAULT_SECURITY_POLICY = TokenAuthenticationPolicy()
+
+
+def _validate_token_authentication_params(
+    *,
+    long_term_token_model: tp.Any,
+    multi_factor_auth_method_model: tp.Any,
+    user_model: tp.Any,
+    project_prefix: tp.Any,
+    login_callback: tp.Any,
+    jwk_resolver: tp.Any,
+    user_id_column: tp.Any,
+    jwt_algorithm: tp.Any,
+    jwt_token_expiration_mins: tp.Any,
+    long_term_token_expiration_mins: tp.Any,
+    login_rate_limit_max_attempts: tp.Any,
+    login_rate_limit_window_seconds: tp.Any,
+    security_policy: tp.Any,
+    pwned_passwords_api_url: tp.Any,
+) -> None:
+    """Validate ``set_token_authentication`` arguments at configuration time.
+
+    Surfacing bad configuration here (rather than on the first request) turns
+    silent misconfiguration into an immediate, descriptive ``ConfigurationError``.
+    """
+    required_models = {
+        "long_term_token_model": long_term_token_model,
+        "multi_factor_auth_method_model": multi_factor_auth_method_model,
+        "user_model": user_model,
+    }
+    for name, value in required_models.items():
+        if value is None:
+            raise ConfigurationError(f"set_token_authentication: {name} is required")
+
+    if not isinstance(project_prefix, str) or not project_prefix:
+        raise ConfigurationError(
+            "set_token_authentication: project_prefix must be a non-empty string"
+        )
+
+    for name, value in (("login_callback", login_callback), ("jwk_resolver", jwk_resolver)):
+        if not callable(value):
+            raise ConfigurationError(f"set_token_authentication: {name} must be callable")
+
+    for name, value in (("user_id_column", user_id_column), ("jwt_algorithm", jwt_algorithm)):
+        if not isinstance(value, str) or not value:
+            raise ConfigurationError(f"set_token_authentication: {name} must be a non-empty string")
+
+    positive_ints = {
+        "jwt_token_expiration_mins": jwt_token_expiration_mins,
+        "long_term_token_expiration_mins": long_term_token_expiration_mins,
+        "login_rate_limit_max_attempts": login_rate_limit_max_attempts,
+        "login_rate_limit_window_seconds": login_rate_limit_window_seconds,
+    }
+    for name, value in positive_ints.items():
+        # bool is an int subclass; reject it explicitly to catch True/False mistakes.
+        if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
+            raise ConfigurationError(f"set_token_authentication: {name} must be a positive integer")
+
+    if security_policy is None:
+        raise ConfigurationError("set_token_authentication: security_policy must not be None")
+
+    if pwned_passwords_api_url is not None and (
+        not isinstance(pwned_passwords_api_url, str) or not pwned_passwords_api_url
+    ):
+        raise ConfigurationError(
+            "set_token_authentication: pwned_passwords_api_url must be a non-empty string or None"
+        )
 
 
 def set_token_authentication(
@@ -83,10 +151,11 @@ def set_token_authentication(
     jwt_claims: JWTRegisteredClaims = DEFAULT_REGISTERED_CLAIMS,
     cookie_attributes: tp.Optional[CookieAttributes] = None,
     security_policy: tp.Optional[type["TokenAuthenticationPolicy"]] = DEFAULT_SECURITY_POLICY,
-    totp_used_code_model: tp.Any = None,
+    totp_replay_state_model: tp.Any = None,
     rate_limit_model: tp.Any = None,
     login_rate_limit_max_attempts: int = DEFAULT_LOGIN_RATE_LIMIT_MAX_ATTEMPTS,
     login_rate_limit_window_seconds: int = DEFAULT_LOGIN_RATE_LIMIT_WINDOW_SECONDS,
+    pwned_passwords_api_url: tp.Optional[str] = DEFAULT_PWNED_PASSWORDS_API_URL,
 ) -> None:
     """
     Configure token-based authentication for a Pyramid application (with conflict detection).
@@ -109,11 +178,35 @@ def set_token_authentication(
         jwt_claims: Default JWT registered claims to include in the token payload.
         cookie_attributes: Optional cookie attributes for refresh token cookies.
         security_policy: A security policy instance to use for token authentication.
-        totp_used_code_model: Optional model for TOTP replay protection (UNLOGGED table).
+        totp_replay_state_model: Optional model for TOTP replay protection -- a single
+            high-water-mark row per user (UNLOGGED table). Omit to disable.
         rate_limit_model: Optional model for rate limiting (UNLOGGED table).
         login_rate_limit_max_attempts: Max login attempts per IP within the window (default: 10).
         login_rate_limit_window_seconds: Rate limit window in seconds (default: 300).
+        pwned_passwords_api_url: Optional Have I Been Pwned range API URL (must end in
+            ``/``). When ``None`` (the default) the breached-password check is disabled
+            and password changes never contact an external service.
+
+    Raises:
+        pyramid.exceptions.ConfigurationError: If any parameter is missing or invalid.
     """
+
+    _validate_token_authentication_params(
+        long_term_token_model=long_term_token_model,
+        multi_factor_auth_method_model=multi_factor_auth_method_model,
+        user_model=user_model,
+        project_prefix=project_prefix,
+        login_callback=login_callback,
+        jwk_resolver=jwk_resolver,
+        user_id_column=user_id_column,
+        jwt_algorithm=jwt_algorithm,
+        jwt_token_expiration_mins=jwt_token_expiration_mins,
+        long_term_token_expiration_mins=long_term_token_expiration_mins,
+        login_rate_limit_max_attempts=login_rate_limit_max_attempts,
+        login_rate_limit_window_seconds=login_rate_limit_window_seconds,
+        security_policy=security_policy,
+        pwned_passwords_api_url=pwned_passwords_api_url,
+    )
 
     def register():
         config.registry.tet_auth_long_term_token_model = long_term_token_model
@@ -134,10 +227,11 @@ def set_token_authentication(
         config.registry.tet_auth_long_term_token_expiration_mins = long_term_token_expiration_mins
         config.registry.tet_auth_security_policy = security_policy
 
-        config.registry.tet_auth_totp_used_code_model = totp_used_code_model
+        config.registry.tet_auth_totp_replay_state_model = totp_replay_state_model
         config.registry.tet_auth_rate_limit_model = rate_limit_model
         config.registry.tet_auth_login_rate_limit_max_attempts = login_rate_limit_max_attempts
         config.registry.tet_auth_login_rate_limit_window_seconds = login_rate_limit_window_seconds
+        config.registry.tet_auth_pwned_passwords_api_url = pwned_passwords_api_url
 
     config.action(discriminator="set_token_authentication", callable=register)
 

@@ -28,11 +28,18 @@ class TetTokenService(RequestScopedBaseService):
         self.long_term_token_cookie_name: str = self.registry.tet_auth_long_term_token_cookie_name
         self.user_id_column: str = self.registry.tet_auth_user_id_column
         self.jwt_expiration_mins: int = self.registry.tet_auth_jwt_expiration_mins
+        self.long_term_token_expiration_mins: int = (
+            self.registry.tet_auth_long_term_token_expiration_mins
+        )
         self.jwt_algorithm: str = self.registry.tet_auth_jwt_algorithm
         self.jwt_claims: JWTRegisteredClaims = self.registry.tet_auth_jwt_claims
 
     def create_long_term_token(
-        self, *, user_id: tp.Any, project_prefix: str, expire_timestamp: tp.Optional[datetime] = None
+        self,
+        *,
+        user_id: tp.Any,
+        project_prefix: str,
+        expire_timestamp: tp.Optional[datetime] = None,
     ) -> str:
         """
         Generates a long-term token for a user with a project-specific prefix and stores it in the database.
@@ -46,7 +53,9 @@ class TetTokenService(RequestScopedBaseService):
             The plaintext long-term token with the project-specific prefix.
         """
         if not expire_timestamp:
-            expire_timestamp = datetime.now(UTC) + timedelta(hours=12)
+            expire_timestamp = datetime.now(UTC) + timedelta(
+                minutes=self.long_term_token_expiration_mins
+            )
 
         secret = secrets.token_bytes(32)
         hashed_secret = hashlib.sha256(secret).digest()
@@ -84,7 +93,7 @@ class TetTokenService(RequestScopedBaseService):
         if not token.startswith(prefix):
             raise ValueError("Invalid token prefix")
 
-        payload_hex = token[len(prefix):]
+        payload_hex = token[len(prefix) :]
         payload = bytes.fromhex(payload_hex)
         token_id_bytes = payload[:TOKEN_ID_BYTE_LENGTH]
         secret = payload[TOKEN_ID_BYTE_LENGTH:]
@@ -100,7 +109,9 @@ class TetTokenService(RequestScopedBaseService):
         if not token_from_db:
             raise ValueError("Token not found")
 
-        if not hmac.compare_digest(token_from_db.secret_hash, hashlib.sha256(secret).digest().hex()):
+        if not hmac.compare_digest(
+            token_from_db.secret_hash, hashlib.sha256(secret).digest().hex()
+        ):
             raise ValueError("Invalid token")
 
         if token_from_db.expires_at and token_from_db.expires_at < datetime.now(UTC):

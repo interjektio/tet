@@ -9,43 +9,54 @@ ready-made views that you can mount under any route prefix.
 
 ### 1. Define your models
 
-Your application needs three SQLAlchemy models.  Tet provides mixins for each;
-you add the foreign keys and any extra columns.
+Your application provides the concrete models; Tet provides a mixin for each of
+the three required ones (user, token, MFA method) plus two optional ones
+(replay-protection state and rate-limit attempts).  You add the foreign keys
+(or, for `TOTPReplayState`, the FK target via `__user_id_fk__`) and any extra
+columns.  The examples use SQLAlchemy 2.0 typed declarative
+(`Mapped` / `mapped_column`).
 
 ```python
-from sqlalchemy import Column, ForeignKey, Integer, String
-from sqlalchemy.orm import declarative_base
+from sqlalchemy import ForeignKey
+from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
 from tet.security.models import (
     MultiFactorAuthenticationMethodMixin,
     RateLimitAttemptMixin,
-    TOTPUsedCodeMixin,
+    TOTPReplayStateMixin,
     TokenMixin,
 )
 from tet.sqlalchemy.password import UserPasswordMixin
 
-Base = declarative_base()
+
+class Base(DeclarativeBase):
+    pass
 
 
 class User(UserPasswordMixin, Base):
     __tablename__ = "users"
-    id = Column(Integer, primary_key=True)
-    email = Column(String, unique=True, nullable=False)
-    display_name = Column(String, nullable=False)
+    id: Mapped[int] = mapped_column(primary_key=True)
+    email: Mapped[str] = mapped_column(unique=True)
+    display_name: Mapped[str] = mapped_column()
 
 
 class Token(TokenMixin, Base):
-    user_id = Column(Integer, ForeignKey("users.id"), nullable=False)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id"))
 
 
 class MultiFactorAuthMethod(MultiFactorAuthenticationMethodMixin, Base):
-    user_id = Column(Integer, ForeignKey("users.id"), nullable=False)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id"))
 
 
-class TOTPUsedCode(TOTPUsedCodeMixin, Base):
-    """UNLOGGED table -- survives restarts but not crashes."""
+class TOTPReplayState(TOTPReplayStateMixin, Base):
+    """One high-water-mark row per user for TOTP replay protection.
+
+    UNLOGGED -- ephemeral, safe to lose on a crash, and kept out of the WAL so
+    it adds no write amplification on every login.  The mixin owns the
+    ``user_id`` primary key; you only point it at your user table.
+    """
+    __user_id_fk__ = "users.id"
     __table_args__ = {"prefixes": ["UNLOGGED"]}
-    user_id = Column(Integer, ForeignKey("users.id"), nullable=False)
 
 
 class RateLimitAttempt(RateLimitAttemptMixin, Base):
@@ -57,8 +68,12 @@ class RateLimitAttempt(RateLimitAttemptMixin, Base):
 `tet.sqlalchemy.password`) gives you `password` (a hashed column via passlib) and
 `validate_password()`.
 
-`TOTPUsedCode` and `RateLimitAttempt` are optional.  Mark them `UNLOGGED` for
-performance -- they hold ephemeral data that is safe to lose on a crash.
+`TOTPReplayState` and `RateLimitAttempt` are optional.  `TOTPReplayStateMixin`
+owns the **primary key** -- ``user_id`` is the FK declared ``primary_key=True``
+(one row per user), so you only set ``__user_id_fk__`` to your user table's PK.
+Mark both `UNLOGGED`: they hold ephemeral data that is safe to lose on a crash,
+and keeping them out of the write-ahead log avoids WAL writes on the hot login
+path.
 
 ### 2. Write a login callback
 
@@ -83,11 +98,19 @@ def login_callback(request):
 
     return AuthLoginResult(
         user_id=user.id,
-        user_identity=email,
+        named_identity=email,
         totp_token=body.get("token"),  # forwarded if the client sent one
         success=True,
     )
 ```
+
+> **`user_id` vs `named_identity`.**  These are deliberately different.  `user_id`
+> is the internal primary key used to mint tokens and authorise requests.
+> `named_identity` is the *named identity* the user typed to log in -- an email
+> address or username -- and is used only for logging and auditing (it is the
+> value carried by the `AuthnLogin*` events).  Never pass `named_identity` where
+> a real `user_id` is expected.  (The request *body* key the client posts is a
+> separate, app-defined wire contract -- in these examples `"user_identity"`.)
 
 If MFA is enabled for the user, `tet.security` handles the challenge
 automatically -- you just need to pass through the `token` field from the
@@ -145,8 +168,10 @@ def main(global_config, **settings):
             samesite="Strict",
         ),
         # Optional -- pass models to enable, or omit to disable
-        totp_used_code_model=TOTPUsedCode,
+        totp_replay_state_model=TOTPReplayState,
         rate_limit_model=RateLimitAttempt,
+        # Optional -- omit to skip the breached-password check entirely
+        pwned_passwords_api_url="https://api.pwnedpasswords.com/range/",
     )
 
     config.scan()
@@ -175,8 +200,12 @@ After the setup above, the following routes are available (under your chosen
 | GET | `/mfa/methods` | List active MFA methods |
 | POST | `/mfa/app/disable` | Disable a TOTP method |
 
-All routes except `/login`, `/token/refresh`, and `/logout` require
-authentication (the default permission is `"view"`).
+`/login` and `/token/refresh` require no authentication.  Every other route
+requires a valid access token in the `Authorization: Bearer` header (the default
+permission is `"view"`).  `/logout` is a special case: the route itself carries
+no Pyramid permission, but its handler still requires the access token (to
+identify the user) **and** the refresh-token cookie (to find the token to
+revoke) -- so in practice logging out needs both.
 
 
 ## How the token flow works
@@ -184,8 +213,16 @@ authentication (the default permission is `"view"`).
 1. **Login** -- client sends credentials to `/login`.  The login callback
    verifies them.  On success, the server creates a long-term refresh token
    (stored hashed in the database) and a short-lived JWT access token.  The
-   refresh token is set as an `HttpOnly` cookie; the access token is returned
-   in the JSON body.
+   refresh token is set as an `HttpOnly` cookie **and** returned in the JSON
+   body as `refresh_token`; the access token is returned in the body as
+   `access_token`.
+
+   > **Security note:** the refresh token is returned in the body as a
+   > convenience for native/mobile clients that cannot use cookies.  For browser
+   > clients this means the refresh token is *not* shielded by `HttpOnly` --
+   > read it from the cookie and ignore the body copy.  If you only serve
+   > browsers and want strict `HttpOnly` handling, strip `refresh_token` from
+   > the response in a custom view or response callback.
 
 2. **Authenticated requests** -- the client sends the access token in the
    `Authorization: Bearer <token>` header.  The `TokenAuthenticationPolicy`
@@ -195,7 +232,8 @@ authentication (the default permission is `"view"`).
    `/token/refresh`.  The refresh token cookie is validated against the
    database and a new access token is issued.
 
-4. **Logout** -- `/logout` deletes the refresh token from the database and
+4. **Logout** -- `/logout` requires the access token (to identify the user) and
+   the refresh cookie; it deletes that refresh token from the database and
    clears the cookie.
 
 
@@ -216,11 +254,16 @@ TOTP support is built in.  The flow from the client's perspective:
 
 ### Replay protection
 
-If you pass a `totp_used_code_model` to `set_token_authentication`, each
-time-step is recorded and a code cannot be reused within its validity window.
-The model should be an UNLOGGED table for performance.  Call
-`TetMultiFactorAuthenticationService.cleanup_used_codes()` periodically to
-prune old entries.
+If you pass a `totp_replay_state_model` to `set_token_authentication`, a code
+cannot be reused: the service keeps a single high-water-mark row per user (the
+most recent TOTP time-step accepted) and rejects any code whose time-step is
+less than or equal to it.
+
+Because it is one row per user, updated in place under the method-row lock,
+there is **no history to grow and nothing to clean up** -- unlike the older
+used-code table.  Make it an UNLOGGED table: the state is ephemeral (safe to
+lose on a crash, which at worst re-opens a single 30-second replay window) and
+staying out of the WAL means TOTP logins add no write-ahead-log traffic.
 
 
 ## Rate limiting
@@ -246,32 +289,43 @@ for logging, auditing, or side effects:
 from tet.security.events import AuthnLoginSuccess, AuthnLoginFail
 
 def on_login_success(event):
-    log.info("Login: user=%s ip=%s", event.user_identity, event.request.client_addr)
+    log.info("Login: user=%s ip=%s", event.named_identity, event.request.client_addr)
 
 def on_login_fail(event):
-    log.warning("Failed login: user=%s ip=%s", event.user_identity, event.request.client_addr)
+    log.warning("Failed login: user=%s ip=%s", event.named_identity, event.request.client_addr)
 
 config.add_subscriber(on_login_success, AuthnLoginSuccess)
 config.add_subscriber(on_login_fail, AuthnLoginFail)
 ```
 
-Available events:
+Available events and the user-identifier field each one carries:
 
-| Event | Fired when |
-|-------|-----------|
-| `AuthnLoginSuccess` | Successful login |
-| `AuthnLoginFail` | Failed login attempt |
-| `AuthnLogoutSuccess` | Successful logout |
-| `AuthnLogoutFail` | Failed logout |
-| `AuthnPasswordChange` | Password changed |
-| `AuthnPasswordChangeFail` | Password change failed |
-| `AuthnMfaMethodCreated` | New MFA method set up |
-| `AuthnMfaMethodDisabled` | MFA method disabled |
-| `AuthnRefreshTokensRevoked` | Other refresh tokens revoked |
-| `AuthnCurrentRefreshTokenRevoked` | Current refresh token revoked |
-| `AuthzFail` | Authorization denied |
+| Event | Fired when | Identifier field |
+|-------|-----------|------------------|
+| `AuthnLoginSuccess` | Successful login | `named_identity` |
+| `AuthnLoginFail` | Failed login attempt | `named_identity` |
+| `AuthnLogoutSuccess` | Successful logout | `user_id` |
+| `AuthnLogoutFail` | Failed logout | `user_id` |
+| `AuthnPasswordChange` | Password changed | `authenticated_userid` |
+| `AuthnPasswordChangeFail` | Password change failed | `authenticated_userid` |
+| `AuthnMfaMethodCreated` | New MFA method set up | `authenticated_userid`, `method` |
+| `AuthnMfaMethodDisabled` | MFA method disabled | `authenticated_userid`, `method` |
+| `AuthnMfaMethodDisableFail` | MFA method disable failed | `authenticated_userid`, `method` |
+| `AuthnRefreshTokensRevoked` | Other refresh tokens revoked | `authenticated_userid` |
+| `AuthnRefreshTokenRevokeFail` | Revoking other tokens failed | `authenticated_userid` |
+| `AuthnCurrentRefreshTokenRevoked` | Current refresh token revoked | `authenticated_userid` |
+| `AuthnCurrentRefreshTokenRevokeFail` | Current token revoke failed | `authenticated_userid` |
 
-All events carry the originating `request` and the relevant user identifier.
+Every event carries the originating `request`.  Note that the user-identifier
+field is **not** uniformly named: login events use `named_identity`, logout
+events use `user_id`, and the others use `authenticated_userid`.
+`named_identity` is the named identity (email/username) used at login; `user_id`
+and `authenticated_userid` are the internal primary key.  A generic subscriber
+must account for these differing field names.
+
+`AuthzFail` and `AuthnInputValidationFail` are also defined in
+`tet.security.events` but are **not** emitted by the framework -- they are
+provided for applications to fire from their own authorization code.
 
 
 ## Password validation
@@ -279,16 +333,25 @@ All events carry the originating `request` and the relevant user identifier.
 `TetAuthService.change_password()` enforces:
 
 - Minimum length of 12 characters, maximum 128
-- A strength score (based on length heuristics)
-- A check against the [Have I Been Pwned](https://haveibeenpwned.com/Passwords)
-  breached passwords API (via k-anonymity -- only a 5-character SHA-1 prefix
-  is sent)
+- A strength score (currently a length-based heuristic only)
+- *Optionally*, a check against the
+  [Have I Been Pwned](https://haveibeenpwned.com/Passwords) breached passwords
+  API (via k-anonymity -- only a 5-character SHA-1 prefix is sent)
 
-Configure the API URL in your settings:
+The breach check is **opt-in** and never required.  Pass
+`pwned_passwords_api_url` to `set_token_authentication()` to enable it; omit it
+(the default is `None`) and password changes never contact an external service.
+The URL must end in `/`:
 
-```ini
-pwned_passwords_api_url = https://api.pwnedpasswords.com/range/
+```python
+config.set_token_authentication(
+    ...,
+    pwned_passwords_api_url="https://api.pwnedpasswords.com/range/",
+)
 ```
+
+If the API is unreachable the check **fails open** (the password is treated as
+not breached) so that an HIBP outage cannot block legitimate password changes.
 
 
 ## Customising the security policy
@@ -363,15 +426,24 @@ are required have no default:
 | `project_prefix` | *(required)* | Prefix for long-term token strings (e.g. `"MYAPP_"`) |
 | `login_callback` | *(required)* | Callable `(request) -> AuthLoginResult` |
 | `jwk_resolver` | *(required)* | Callable `(request) -> str | dict` returning the JWT signing key |
+| `user_id_column` | `"user_id"` | Attribute on the token model holding the user id |
 | `jwt_algorithm` | `"HS256"` | JWT signing algorithm |
 | `jwt_token_expiration_mins` | `15` | Access token lifetime in minutes |
-| `long_term_token_expiration_mins` | `720` | Refresh token lifetime in minutes (12 hours) |
+| `long_term_token_expiration_mins` | `720` | Refresh token lifetime in minutes (12 hours); applied to both the cookie and the stored token |
 | `authorization_header` | `"Authorization"` | Header name for access tokens |
+| `long_term_token_header` | `"X-Long-Token"` | Header name for the long-term token (reserved) |
 | `long_term_token_cookie_name` | `"refresh-token"` | Cookie name for refresh tokens |
 | `jwt_claims` | `JWTRegisteredClaims()` | Default registered claims for JWTs |
 | `cookie_attributes` | `None` | `CookieAttributes` for refresh token cookies |
 | `security_policy` | `TokenAuthenticationPolicy()` | The Pyramid security policy |
-| `totp_used_code_model` | `None` | Model for TOTP replay protection (enables if set) |
+| `totp_replay_state_model` | `None` | Model for TOTP replay protection -- one high-water-mark row per user (enables if set) |
 | `rate_limit_model` | `None` | Model for rate limiting (enables if set) |
 | `login_rate_limit_max_attempts` | `10` | Max login attempts per key in window |
 | `login_rate_limit_window_seconds` | `300` | Rate limit window (seconds) |
+| `pwned_passwords_api_url` | `None` | HIBP range API URL (must end in `/`); `None` disables the breach check |
+
+All parameters are validated when `set_token_authentication()` is called: a
+missing required model, an empty `project_prefix`, a non-callable
+`login_callback`/`jwk_resolver`, or a non-positive expiration/rate-limit value
+raises `pyramid.exceptions.ConfigurationError` immediately, rather than failing
+on the first request.

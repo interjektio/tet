@@ -3,7 +3,6 @@ import io
 import logging
 import time
 import typing as tp
-from datetime import datetime, timedelta
 
 import pyotp
 import qrcode
@@ -23,7 +22,6 @@ from tet.security.config import (
     CookieAttributes,
     TOTPData,
     MultiFactorAuthMethodType,
-    UTC,
 )
 from tet.security.tokens import TetTokenService
 from tet.security.auth import TetAuthService
@@ -41,9 +39,7 @@ class TetMultiFactorAuthenticationService(RequestScopedBaseService):
         self.tet_multi_factor_auth_method_model: tp.Any = (
             self.registry.tet_multi_factor_auth_method_model
         )
-        self.totp_used_code_model: tp.Any = getattr(
-            self.registry, "tet_auth_totp_used_code_model", None
-        )
+        self.totp_replay_state_model: tp.Any = self.registry.tet_auth_totp_replay_state_model
         self.project_prefix: str = self.registry.tet_auth_project_prefix
         self.long_term_token_cookie_name = self.registry.tet_auth_long_term_token_cookie_name
         self.long_term_token_expiration_mins = (
@@ -97,10 +93,7 @@ class TetMultiFactorAuthenticationService(RequestScopedBaseService):
             conditions.append(self.tet_multi_factor_auth_method_model.is_active == is_active)
         if verified:
             conditions.append(self.tet_multi_factor_auth_method_model.verified == verified)
-        query = (
-            self.session.query(self.tet_multi_factor_auth_method_model)
-            .filter(*conditions)
-        )
+        query = self.session.query(self.tet_multi_factor_auth_method_model).filter(*conditions)
         if for_update:
             query = query.with_for_update()
         return query.one_or_none()
@@ -165,42 +158,33 @@ class TetMultiFactorAuthenticationService(RequestScopedBaseService):
             logger.exception(f"details {str(e)}")
             raise HTTPInternalServerError(json_body={"message": "TOTP verification failed."}) from e
 
-    def _check_totp_replay(self, user_id: tp.Any, time_step: int) -> None:
-        if not self.totp_used_code_model:
+    def _enforce_totp_replay(self, user_id: tp.Any, time_step: int) -> None:
+        """Reject a TOTP code whose time-step has already been used.
+
+        Keeps a single high-water-mark row per user in the (UNLOGGED) replay
+        state table, updated in place -- no history, no cleanup.  The caller
+        must already hold the method-row ``FOR UPDATE`` lock, which serialises
+        concurrent challenges and makes the first-use insert race-free.
+        """
+        if not self.totp_replay_state_model:
             return
-        existing = (
-            self.session.query(self.totp_used_code_model)
-            .filter(
-                self.totp_used_code_model.user_id == user_id,
-                self.totp_used_code_model.time_step == time_step,
-            )
+
+        model = self.totp_replay_state_model
+        state = (
+            self.session.query(model)
+            .filter(model.user_id == user_id)
+            .with_for_update()
             .one_or_none()
         )
-        if existing:
-            raise HTTPForbidden(
-                json_body={"message": "TOTP code already used."}
-            )
-
-    def _record_totp_use(self, user_id: tp.Any, time_step: int) -> None:
-        if not self.totp_used_code_model:
+        if state is None:
+            self.session.add(model(user_id=user_id, last_used_time_step=time_step))
+            self.session.flush()
             return
-        used = self.totp_used_code_model()
-        used.user_id = user_id
-        used.time_step = time_step
-        self.session.add(used)
-        self.session.flush()
 
-    def cleanup_used_codes(self, older_than_seconds: int = 120) -> int:
-        if not self.totp_used_code_model:
-            return 0
-        cutoff = datetime.now(UTC) - timedelta(seconds=older_than_seconds)
-        count = (
-            self.session.query(self.totp_used_code_model)
-            .filter(self.totp_used_code_model.used_at < cutoff)
-            .delete()
-        )
+        if time_step <= state.last_used_time_step:
+            raise HTTPForbidden(json_body={"message": "TOTP code already used."})
+        state.last_used_time_step = time_step
         self.session.flush()
-        return count
 
     def handle_totp_challenge(
         self,
@@ -209,7 +193,9 @@ class TetMultiFactorAuthenticationService(RequestScopedBaseService):
         totp_token: str = None,
         cookie_attributes: CookieAttributes = None,
     ) -> dict[str, tp.Any]:
-        replay_protection = self.totp_used_code_model is not None
+        replay_protection = self.totp_replay_state_model is not None
+        # When replay protection is on, lock the method row for the transaction
+        # so two concurrent logins cannot both accept the same time-step.
         totp_mfa_method = self.get_method(
             user_id=user_id,
             method_type=MultiFactorAuthMethodType.TOTP,
@@ -233,12 +219,13 @@ class TetMultiFactorAuthenticationService(RequestScopedBaseService):
             raise HTTPForbidden(json_body={"message": "Two-factor authentication failed."})
 
         current_time_step = int(time.time()) // 30
-        self._check_totp_replay(user_id, current_time_step)
-        self._record_totp_use(user_id, current_time_step)
+        self._enforce_totp_replay(user_id, current_time_step)
 
         totp_mfa_method.mark_used()
 
-        refresh_token = self.token_service.create_long_term_token(user_id=user_id, project_prefix=self.project_prefix)
+        refresh_token = self.token_service.create_long_term_token(
+            user_id=user_id, project_prefix=self.project_prefix
+        )
         access_token = self.token_service.create_short_term_jwt(user_id)
 
         self.auth_service.set_cookies(
@@ -248,7 +235,7 @@ class TetMultiFactorAuthenticationService(RequestScopedBaseService):
         self.registry.notify(
             security_events.AuthnLoginSuccess(
                 request=self.request,
-                user_identity=self.request.json_body.get("user_identity", user_id),
+                named_identity=self.request.json_body.get("user_identity", user_id),
             )
         )
         return {"success": is_valid, "access_token": access_token, "refresh_token": refresh_token}

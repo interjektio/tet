@@ -8,15 +8,23 @@
       password management, and Pyramid security policy integration.
       Installable via the ``tet[security]`` extra.
     * New SQLAlchemy model mixins: ``TokenMixin``,
-      ``MultiFactorAuthenticationMethodMixin``, ``TOTPUsedCodeMixin``,
+      ``MultiFactorAuthenticationMethodMixin``, ``TOTPReplayStateMixin``,
       ``RateLimitAttemptMixin``.
     * Pyramid 2.0 compatibility for security/authorization imports.
     * Auth views registered via ``config.include("tet.security.authentication")``.
     * Event system for login, logout, password change, MFA, and token
       revocation (``tet.security.events``).
-    * TOTP replay protection via UNLOGGED tables.
+    * TOTP replay protection via a single high-water-mark row per user
+      (``totp_replay_state_model``, ``TOTPReplayStateMixin``); the application
+      binds the primary key. Use an UNLOGGED table so the hot login path adds no
+      WAL traffic. Replaces the earlier used-code history table -- no growth and
+      no cleanup job.
     * Login rate limiting by client IP.
-    * Breached password checking via Have I Been Pwned API (k-anonymity).
+    * Optional breached-password checking via Have I Been Pwned API
+      (k-anonymity); opt in by passing ``pwned_passwords_api_url``. No external
+      service is contacted unless configured.
+    * ``set_token_authentication`` validates its arguments at configuration
+      time, raising ``pyramid.exceptions.ConfigurationError`` on bad input.
     * Drop Python 3.8, 3.9 support. Require Python >= 3.10.
 
 

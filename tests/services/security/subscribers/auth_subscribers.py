@@ -26,10 +26,10 @@ def struct_log(event_name: str, description: str, level: int = None, **extra_fie
 # Login events
 @subscriber(AuthnLoginFail)
 def handle_login_failed_event(event: AuthnLoginFail):
-    user_identity = event.user_identity
-    description = f"User {user_identity} failed to log in."
+    named_identity = event.named_identity
+    description = f"User {named_identity} failed to log in."
     struct_log(
-        event_name=f"authn_login_fail:{user_identity}",
+        event_name=f"authn_login_fail:{named_identity}",
         description=description,
         level=logging.WARNING,
     )
@@ -37,10 +37,10 @@ def handle_login_failed_event(event: AuthnLoginFail):
 
 @subscriber(AuthnLoginSuccess)
 def handle_login_success_event(event: AuthnLoginSuccess):
-    user_identity = event.user_identity
-    description = f"User {user_identity} logged in successfully."
+    named_identity = event.named_identity
+    description = f"User {named_identity} logged in successfully."
     struct_log(
-        event_name=f"authn_login_success:{user_identity}",
+        event_name=f"authn_login_success:{named_identity}",
         description=description,
         level=logging.INFO,
     )

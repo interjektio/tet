@@ -35,6 +35,9 @@ class TetAuthService(RequestScopedBaseService):
         )
         self.user_model: tp.Any = self.registry.tet_auth_user_model
         self.route_prefix: str = self.registry.tet_auth_route_prefix
+        self.pwned_passwords_api_url: tp.Optional[str] = (
+            self.registry.tet_auth_pwned_passwords_api_url
+        )
 
     @property
     def _cookie_path(self) -> str:
@@ -90,9 +93,14 @@ class TetAuthService(RequestScopedBaseService):
         return user.validate_password(password)
 
     def is_password_breached(self, password: str) -> bool:
+        # The breach check is opt-in: when no API URL was configured at setup
+        # time we skip it entirely rather than requiring an external service.
+        if not self.pwned_passwords_api_url:
+            return False
+
         sha1_hash = hashlib.sha1(password.encode("utf-8")).hexdigest().upper()
         prefix, suffix = sha1_hash[:5], sha1_hash[5:]
-        url = f"{self.request.registry.settings['pwned_passwords_api_url']}{prefix}"
+        url = f"{self.pwned_passwords_api_url}{prefix}"
         try:
             response = requests.get(url, timeout=5)
             response.raise_for_status()

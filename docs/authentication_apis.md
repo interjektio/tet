@@ -7,7 +7,7 @@
 
 ### **Login**
 
-#### `POST /login`  
+#### `POST /login`
 _Authenticate and return tokens. Also, handle MFA challenge if enabled._
 
 <details>
@@ -22,17 +22,22 @@ _Authenticate and return tokens. Also, handle MFA challenge if enabled._
   "password": "<password>"
 }
 ```
-### Return 
+### Return
 
 **200 Response:**
 ```json
 {
-  "access_token": "<access_token>"
+  "success": true,
+  "access_token": "<access_token>",
+  "refresh_token": "<refresh_token>"
 }
 ```
+_The refresh token is returned both in the body (for non-cookie clients) and as
+the `Set-Cookie` header below._
+
 **Headers:**
 ```
-Set-Cookie: refresh-token={project_prefix}{machine_identifier}; Max-Age={timestamp in s}; Path=/api/auth/; 
+Set-Cookie: refresh-token={project_prefix}{hex-encoded token}; Max-Age={seconds}; Path=/api/auth/;
 expires="datetime"; secure; HttpOnly; SameSite=Strict
 ```
 
@@ -63,6 +68,7 @@ expires="datetime"; secure; HttpOnly; SameSite=Strict
 **200 Response:**
 ```json
 {
+  "success": true,
   "mfa_required": true
 }
 ```
@@ -92,13 +98,14 @@ expires="datetime"; secure; HttpOnly; SameSite=Strict
 **200 Response:**
 ```json
 {
-  "success": "<bool>",
-  "access_token": "<access_token>"
+  "success": true,
+  "access_token": "<access_token>",
+  "refresh_token": "<refresh_token>"
 }
 ```
 **Headers:**
 ```
-Set-Cookie: refresh-token={project_prefix}{machine_identifier}; Max-Age={timestamp in s}; Path=/api/auth/; 
+Set-Cookie: refresh-token={project_prefix}{hex-encoded token}; Max-Age={seconds}; Path=/api/auth/;
 expires="datetime"; secure; HttpOnly; SameSite=Strict
 ```
 
@@ -114,7 +121,7 @@ expires="datetime"; secure; HttpOnly; SameSite=Strict
 
 ### **Token Refresh**
 
-#### `POST /token/refresh`  
+#### `POST /token/refresh`
 _Retrieve new access token using refresh token._
 
 - **Permissions:** None
@@ -122,7 +129,7 @@ _Retrieve new access token using refresh token._
 ### Request:
 **Headers:**
 ```
-Cookie:refresh-token={project_prefix}{machine_identifier}; Max-Age={timestamp in s}; Path=/api/auth/; 
+Cookie:refresh-token={project_prefix}{hex-encoded token}; Max-Age={seconds}; Path=/api/auth/;
 expires=”datetime”; secure; HttpOnly; SameSite=Strict
 ```
 ### Return:
@@ -144,15 +151,18 @@ expires=”datetime”; secure; HttpOnly; SameSite=Strict
 
 ### **Logout**
 
-#### `POST /logout`  
+#### `POST /logout`
 _Invalidate session or refresh tokens._
 
-- **Permissions:** None
+- **Permissions:** Authenticated user — requires the access token (to identify
+  the user) **and** the refresh-token cookie (to find the token to revoke).
 
-### Request: 
+### Request:
 **Headers:**
 ```
-Cookie:refresh-token={project_prefix}{machine_identifier}; Max-Age={timestamp in s}; Path=/api/auth/; 
+Authorization: Bearer <access_token>
+
+Cookie:refresh-token={project_prefix}{hex-encoded token}; Max-Age={seconds}; Path=/api/auth/;
 expires=”datetime”; secure; HttpOnly; SameSite=Strict
 ```
 ### Return:
@@ -179,18 +189,18 @@ Set-Cookie: refresh-token=; Max-Age=0; Path=/api/auth/; expires="datetime"
 
 ### **Change Password**
 
-#### `POST /users/me/password`  
+#### `POST /users/me/password`
 _Change password for authenticated user._
 
 - **Permissions:** Authenticated user
 
-### Request: 
+### Request:
 
 **Headers:**
 ```
 Authorization: Bearer <access_token>
 
-Cookie:refresh-token={project_prefix}{machine_identifier}; Max-Age={timestamp in s}; Path=/api/auth/; 
+Cookie:refresh-token={project_prefix}{hex-encoded token}; Max-Age={seconds}; Path=/api/auth/;
 expires=”datetime”; secure; HttpOnly; SameSite=Strict
 ```
 **Payload:**
@@ -218,17 +228,17 @@ expires=”datetime”; secure; HttpOnly; SameSite=Strict
 
 ### **Revoke Other Tokens**
 
-#### `DELETE /users/me/tokens/others`  
+#### `DELETE /users/me/tokens/others`
 _Revoke all refresh tokens except the current session’s._
 
 - **Permissions:** Authenticated user
 
-### Request: 
+### Request:
 **Headers:**
 ```
 Authorization: Bearer <access_token>
 
-Cookie:refresh-token={project_prefix}{machine_identifier}; Max-Age={timestamp in s}; Path=/api/auth/; 
+Cookie:refresh-token={project_prefix}{hex-encoded token}; Max-Age={seconds}; Path=/api/auth/;
 expires=”datetime”; secure; HttpOnly; SameSite=Strict
 ```
 **Payload:**
@@ -259,7 +269,7 @@ expires=”datetime”; secure; HttpOnly; SameSite=Strict
 
 ### **Setup TOTP**
 
-#### `POST /mfa/app/setup`  
+#### `POST /mfa/app/setup`
 _Retrieve QR code and secret for TOTP setup._
 
 - **Permissions:** Authenticated user
@@ -269,7 +279,7 @@ _Retrieve QR code and secret for TOTP setup._
 ```
 Authorization: Bearer <access_token>
 
-Cookie:refresh-token={project_prefix}{machine_identifier}; Max-Age={timestamp in s}; Path=/api/auth/; 
+Cookie:refresh-token={project_prefix}{hex-encoded token}; Max-Age={seconds}; Path=/api/auth/;
 expires=”datetime”; secure; HttpOnly; SameSite=Strict
 ```
 **Payload:**
@@ -284,7 +294,7 @@ expires=”datetime”; secure; HttpOnly; SameSite=Strict
 ```json
 {
   "secret": "<mfa_secret>",
-  "qr_code": "<Base64-encoded SVG string>"
+  "qr_code": "data:image/svg+xml;base64,<Base64-encoded SVG>"
 }
 ```
 **Error Response (400, 401, 403, 500):**
@@ -298,17 +308,17 @@ expires=”datetime”; secure; HttpOnly; SameSite=Strict
 
 ### **Verify TOTP**
 
-#### `POST /mfa/app/verify`  
+#### `POST /mfa/app/verify`
 _Verify TOTP code during MFA setup._
 
 - **Permissions:** Authenticated user
 
-### Request: 
+### Request:
 **Headers:**
 ```
 Authorization: Bearer <access_token>
 
-Cookie:refresh-token={project_prefix}{machine_identifier}; Max-Age={timestamp in s}; Path=/api/auth/; 
+Cookie:refresh-token={project_prefix}{hex-encoded token}; Max-Age={seconds}; Path=/api/auth/;
 expires=”datetime”; secure; HttpOnly; SameSite=Strict
 ```
 
@@ -336,17 +346,17 @@ expires=”datetime”; secure; HttpOnly; SameSite=Strict
 
 ### **List MFA Methods**
 
-#### `GET /mfa/methods`  
+#### `GET /mfa/methods`
 _List all active MFA methods._
 
 - **Permissions:** Authenticated user
 
-### Request: 
+### Request:
 **Headers:**
 ```
 Authorization: Bearer <access_token>
 
-Cookie:refresh-token={project_prefix}{machine_identifier}; Max-Age={timestamp in s}; Path=/api/auth/; 
+Cookie:refresh-token={project_prefix}{hex-encoded token}; Max-Age={seconds}; Path=/api/auth/;
 expires=”datetime”; secure; HttpOnly; SameSite=Strict
 ```
 ### Return:
@@ -367,17 +377,17 @@ expires=”datetime”; secure; HttpOnly; SameSite=Strict
 
 ### **Disable MFA**
 
-#### `POST /mfa/app/disable`  
+#### `POST /mfa/app/disable`
 _Disable the current MFA method._
 
 - **Permissions:** Authenticated user
 
-### Request: 
+### Request:
 **Headers:**
 ```
 Authorization: Bearer <access_token>
 
-Cookie:refresh-token={project_prefix}{machine_identifier}; Max-Age={timestamp in s}; Path=/api/auth/; 
+Cookie:refresh-token={project_prefix}{hex-encoded token}; Max-Age={seconds}; Path=/api/auth/;
 expires=”datetime”; secure; HttpOnly; SameSite=Strict
 ```
 
@@ -405,7 +415,11 @@ expires=”datetime”; secure; HttpOnly; SameSite=Strict
 
 ## 📖 Glossary
 
-- `< >`: required param  
+- `< >`: required param
 - `[ ]`: optional param (can be null)
+- `{project_prefix}`: the configured project prefix (e.g. `MYAPP_`)
+- `{hex-encoded token}`: the refresh token payload — an opaque hex string
+  encoding the token id and a random 32-byte secret. It is **not** a machine or
+  device identifier.
 
 ---

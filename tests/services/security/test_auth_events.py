@@ -59,7 +59,7 @@ def test_login_success_event_with_fake_request(pyramid_request_with_event, caplo
     message = f"User {user_identity} Login successful"
     req.message = message
     with caplog.at_level("INFO", logger=__name__):
-        req.registry.notify(AuthnLoginSuccess(request=req, user_identity=user_identity))
+        req.registry.notify(AuthnLoginSuccess(request=req, named_identity=user_identity))
     assert f"{DEFAULT_MESSAGE} {message}" in caplog.text
 
 
@@ -69,7 +69,7 @@ def test_login_failed_event_with_fake_request(pyramid_request_with_event, caplog
     message = f"User {user_identity} Login failed"
     req.message = message
     with caplog.at_level("WARNING", logger=__name__):
-        req.registry.notify(AuthnLoginFail(request=req, user_identity=user_identity))
+        req.registry.notify(AuthnLoginFail(request=req, named_identity=user_identity))
     assert f"{DEFAULT_MESSAGE} {message}" in caplog.text
 
 
@@ -217,7 +217,7 @@ def test_login_notify_success(pyramid_event_request):
     request = pyramid_event_request
     _setup_event_request(request)
     request.registry.tet_auth_login_callback = lambda req: AuthLoginResult(
-        user_id=1, user_identity=DEFAULT_USER_IDENTITY, success=True
+        user_id=1, named_identity=DEFAULT_USER_IDENTITY, success=True
     )
 
     view = AuthViews(request)
@@ -229,7 +229,7 @@ def test_login_notify_success(pyramid_event_request):
     with patch.object(request.registry, "notify") as mock_notify:
         view.login()
         expected_event = AuthnLoginSuccess(
-            user_identity=DEFAULT_USER_IDENTITY,
+            named_identity=DEFAULT_USER_IDENTITY,
             request=request,
         )
         mock_notify.assert_called_once_with(expected_event)
@@ -239,7 +239,7 @@ def test_login_notify_fail(pyramid_event_request):
     request = pyramid_event_request
     _setup_event_request(request)
     request.registry.tet_auth_login_callback = lambda req: AuthLoginResult(
-        user_id=None, user_identity=DEFAULT_USER_IDENTITY
+        user_id=None, named_identity=DEFAULT_USER_IDENTITY
     )
 
     view = AuthViews(request)
@@ -252,7 +252,7 @@ def test_login_notify_fail(pyramid_event_request):
         result = view.login()
         assert isinstance(result, HTTPUnauthorized)
         expected_event = AuthnLoginFail(
-            user_identity=DEFAULT_USER_IDENTITY,
+            named_identity=DEFAULT_USER_IDENTITY,
             request=request,
         )
         mock_notify.assert_called_once_with(expected_event)

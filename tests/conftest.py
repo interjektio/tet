@@ -16,7 +16,7 @@ from tests.models.accounts import (
     Token,
     User,
     MultiFactorAuthenticationMethod,
-    TOTPUsedCode,
+    TOTPReplayState,
     RateLimitAttempt,
 )
 from tet.config import Configurator as tetConfigurator
@@ -54,7 +54,7 @@ def db_engine(database):
     yield engine
     with engine.begin() as conn:
         conn.execute(RateLimitAttempt.__table__.delete())
-        conn.execute(TOTPUsedCode.__table__.delete())
+        conn.execute(TOTPReplayState.__table__.delete())
     engine.dispose()
 
 
@@ -78,22 +78,22 @@ def login_callback(request: Request) -> AuthLoginResult:
     db_session = request.find_service(Session)
 
     payload = request.json_body
-    user_identity = payload.get("user_identity")
+    named_identity = payload.get("user_identity")
     totp_token = payload.get("totp_token")
 
-    if not user_identity:
+    if not named_identity:
         return AuthLoginResult(user_id=None)
 
-    user: User = db_session.query(User).filter(User.email == user_identity).one_or_none()
+    user: User = db_session.query(User).filter(User.email == named_identity).one_or_none()
     if not user or not user.validate_password(payload.get("password", "")):
         return AuthLoginResult(
             user_id=None,
-            user_identity=user_identity,
+            named_identity=named_identity,
         )
 
     return AuthLoginResult(
         user_id=user.id,
-        user_identity=user_identity,
+        named_identity=named_identity,
         totp_token=totp_token,
     )
 
@@ -161,7 +161,7 @@ def pyramid_app(pyramid_config):
         security_policy=TokenAuthenticationPolicy(),
         user_model=User,
         multi_factor_auth_method_model=MultiFactorAuthenticationMethod,
-        totp_used_code_model=TOTPUsedCode,
+        totp_replay_state_model=TOTPReplayState,
         rate_limit_model=RateLimitAttempt,
     )
     pyramid_config.add_route("home", "/")
@@ -194,7 +194,7 @@ def pyramid_event_app(pyramid_config):
         security_policy=TokenAuthenticationPolicy(),
         user_model=User,
         multi_factor_auth_method_model=MultiFactorAuthenticationMethod,
-        totp_used_code_model=TOTPUsedCode,
+        totp_replay_state_model=TOTPReplayState,
         rate_limit_model=RateLimitAttempt,
     )
     pyramid_config.add_route("home", "/")

@@ -16,6 +16,7 @@ from pyramid.request import Request
 
 # ── tet.services ────────────────────────────────────────────────────
 
+
 def test_tet_services_exports():
     from tet.services import (
         ApplicationScopedBaseService,
@@ -35,6 +36,7 @@ def test_tet_services_exports():
 
 
 # ── tet.security (package) ──────────────────────────────────────────
+
 
 def test_tet_security_exports():
     from tet.security import (
@@ -56,7 +58,7 @@ def test_tet_security_exports():
         TetRateLimitService,
         TetTokenService,
         TOTPData,
-        TOTPUsedCodeMixin,
+        TOTPReplayStateMixin,
         TokenAuthenticationPolicy,
         TokenMixin,
     )
@@ -71,6 +73,7 @@ def test_tet_security_exports():
 
 
 # ── tet.security.authentication ─────────────────────────────────────
+
 
 def test_tet_security_authentication_exports():
     from tet.security.authentication import (
@@ -90,7 +93,7 @@ def test_tet_security_authentication_exports():
         TetRateLimitService,
         TetTokenService,
         TOTPData,
-        TOTPUsedCodeMixin,
+        TOTPReplayStateMixin,
         TokenAuthenticationPolicy,
         TokenMixin,
         includeme,
@@ -102,6 +105,7 @@ def test_tet_security_authentication_exports():
 
 
 # ── tet.security.authorization ───────────────────────────────────────
+
 
 def test_tet_security_authorization_exports():
     from tet.security.authorization import (
@@ -123,6 +127,7 @@ def test_tet_security_authorization_exports():
 
 # ── tet.security.compat ──────────────────────────────────────────────
 
+
 def test_tet_security_compat_exports():
     from tet.security.compat import (
         ACLHelper,
@@ -141,6 +146,7 @@ def test_tet_security_compat_exports():
 
 
 # ── tet.security.events ─────────────────────────────────────────────
+
 
 def test_tet_security_events_exports():
     from tet.security.events import (
@@ -185,24 +191,26 @@ def test_tet_security_events_exports():
 
 # ── tet.security.models ─────────────────────────────────────────────
 
+
 def test_tet_security_models_exports():
     from tet.security.models import (
         MultiFactorAuthenticationMethodMixin,
         RateLimitAttemptMixin,
-        TOTPUsedCodeMixin,
+        TOTPReplayStateMixin,
         TokenMixin,
     )
 
     for mixin in (
         MultiFactorAuthenticationMethodMixin,
         RateLimitAttemptMixin,
-        TOTPUsedCodeMixin,
+        TOTPReplayStateMixin,
         TokenMixin,
     ):
         assert hasattr(mixin, "__tablename__"), f"{mixin.__name__} missing __tablename__"
 
 
 # ── tet.security.config (dataclasses & enums) ───────────────────────
+
 
 def test_tet_security_config_exports():
     from tet.security.config import (
@@ -234,6 +242,7 @@ def test_tet_security_config_exports():
 
 # ── tet.security.policy ─────────────────────────────────────────────
 
+
 def test_tet_security_policy_exports():
     from tet.security.policy import TokenAuthenticationPolicy
 
@@ -246,11 +255,17 @@ def test_tet_security_policy_exports():
 
 # ── Service classes ──────────────────────────────────────────────────
 
+
 def test_service_classes_importable():
     from tet.security.tokens import TetTokenService
     from tet.security.auth import TetAuthService
     from tet.security.mfa import TetMultiFactorAuthenticationService
     from tet.security.rate_limit import TetRateLimitService
 
-    for svc in (TetTokenService, TetAuthService, TetMultiFactorAuthenticationService, TetRateLimitService):
+    for svc in (
+        TetTokenService,
+        TetAuthService,
+        TetMultiFactorAuthenticationService,
+        TetRateLimitService,
+    ):
         assert isinstance(svc, type), f"{svc} is not a class"
